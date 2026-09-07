@@ -41,6 +41,8 @@ local zoom = 16
 local yaw = 0
 local pitch = math.rad(-18)
 local wasActive = false
+local lastJumpAt = -math.huge
+local jumpReady = true
 
 local function getCharacterParts(): (Humanoid?, BasePart?)
 	local character = player.Character
@@ -102,7 +104,25 @@ local function onJump(_actionName: string, inputState: Enum.UserInputState)
 
 	local humanoid = getCharacterParts()
 	if humanoid then
+		local now = os.clock()
+		local humanoidState = humanoid:GetState()
+		-- A jump is only valid from the ground. The previous fallback called
+		-- ChangeState on every Space press, which allowed repeated mid-air jumps.
+		if not jumpReady
+			or humanoid.FloorMaterial == Enum.Material.Air
+			or humanoidState == Enum.HumanoidStateType.Jumping
+			or humanoidState == Enum.HumanoidStateType.Freefall
+			or now - lastJumpAt < 0.2 then
+			return Enum.ContextActionResult.Sink
+		end
+		-- Studio can have another ContextAction binding (for example Freecam)
+		-- consuming Space before the fallback receives it. Explicitly enable the
+		-- state and request the transition so the default character can jump.
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
 		humanoid.Jump = true
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		lastJumpAt = now
+		jumpReady = false
 	end
 	return Enum.ContextActionResult.Sink
 end
@@ -155,8 +175,10 @@ ContextActionService:BindActionAtPriority(
 	ACTION_JUMP,
 	onJump,
 	false,
-	Enum.ContextActionPriority.Default.Value,
-	Enum.KeyCode.Space
+	Enum.ContextActionPriority.High.Value,
+	Enum.KeyCode.Space,
+	Enum.KeyCode.Up,
+	Enum.KeyCode.ButtonA
 )
 
 RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, function()
@@ -175,6 +197,12 @@ RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, f
 	end
 
 	wasActive = true
+	local humanoidState = humanoid:GetState()
+	if humanoid.FloorMaterial ~= Enum.Material.Air
+		and humanoidState ~= Enum.HumanoidStateType.Jumping
+		and humanoidState ~= Enum.HumanoidStateType.Freefall then
+		jumpReady = true
+	end
 	local move = Vector3.new(
 		(held.Right and 1 or 0) - (held.Left and 1 or 0),
 		0,
@@ -209,4 +237,3 @@ RunService:BindToRenderStep(CAMERA_STEP, Enum.RenderPriority.Camera.Value + 1, f
 end)
 
 print("[LobbyControls] PlayerModule missing; PC lobby movement and mouse camera fallback enabled.")
-

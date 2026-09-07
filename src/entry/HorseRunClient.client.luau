@@ -1,6 +1,7 @@
 local Players=game:GetService('Players')
 local RunService=game:GetService('RunService')
 local Input=game:GetService('UserInputService')
+local ContextActionService=game:GetService('ContextActionService')
 local Shared=game:GetService('ReplicatedStorage'):WaitForChild('HorseRun')
 local Config=require(Shared.Config)
 local Course=require(Shared.Course)
@@ -163,6 +164,18 @@ local function action(which)
     end
     Remote:FireServer(which)
 end
+-- Roblox CoreGui or an accessibility layer can mark Space as processed before
+-- InputBegan reaches this script. Bind the runner jump at high priority so the
+-- player's jump is reliable while a run is active; the cooldown makes a second
+-- delivery harmless.
+local RUNNER_JUMP_ACTION='HorseHeistRunnerJump'
+ContextActionService:BindActionAtPriority(RUNNER_JUMP_ACTION,function(_,inputState)
+    if inputState==Enum.UserInputState.Begin and phase=='Running' then
+        action('Jump')
+        return Enum.ContextActionResult.Sink
+    end
+    return Enum.ContextActionResult.Pass
+end,false,Enum.ContextActionPriority.High.Value,Enum.KeyCode.Space,Enum.KeyCode.Up,Enum.KeyCode.ButtonA)
 button('LeftButton',runControls,'◀',UDim2.new(0,25,1,-102),UDim2.fromOffset(78,70),function() action('Left') end)
 button('RightButton',runControls,'▶',UDim2.new(0,115,1,-102),UDim2.fromOffset(78,70),function() action('Right') end)
 button('SlideButton',runControls,'슬라이드 ↓',UDim2.new(1,-248,1,-102),UDim2.fromOffset(106,70),function() action('Slide') end)
