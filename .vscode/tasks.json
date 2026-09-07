@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Rojo: Start server",
+      "type": "process",
+      "command": "${env:USERPROFILE}\\.rokit\\tool-storage\\rojo-rbx\\rojo\\7.7.0\\rojo.exe",
+      "args": ["serve", "default.project.json"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "runOptions": { "instanceLimit": 1 }
+    },
+    {
+      "label": "Rojo: Validate mapping",
+      "type": "process",
+      "command": "${env:USERPROFILE}\\.rokit\\tool-storage\\rojo-rbx\\rojo\\7.7.0\\rojo.exe",
+      "args": ["sourcemap", "default.project.json", "--include-non-scripts"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}

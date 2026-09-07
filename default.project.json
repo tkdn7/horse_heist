@@ -1,0 +1,55 @@
+{
+  "name": "RobloxCode",
+  "serveAddress": "127.0.0.1",
+  "servePort": 34872,
+  "emitLegacyScripts": true,
+  "globIgnorePaths": ["**/.gitkeep"],
+  "tree": {
+    "$className": "DataModel",
+    "$ignoreUnknownInstances": true,
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$ignoreUnknownInstances": true,
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "$ignoreUnknownInstances": true,
+        "Client": {
+          "$className": "Folder",
+          "$path": "src/client",
+          "$ignoreUnknownInstances": true
+        },
+        "HorseRunClient": {
+          "$path": "src/entry/HorseRunClient.client.luau",
+          "$ignoreUnknownInstances": true
+        }
+      }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$ignoreUnknownInstances": true,
+      "Server": {
+        "$className": "Folder",
+        "$path": "src/server",
+        "$ignoreUnknownInstances": true
+      },
+      "HorseRunServer": {
+        "$path": "src/entry/HorseRunServer.server.luau",
+        "$ignoreUnknownInstances": true
+      }
+    },
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$ignoreUnknownInstances": true,
+      "Shared": {
+        "$className": "Folder",
+        "$path": "src/shared",
+        "$ignoreUnknownInstances": true
+      },
+      "HorseRun": {
+        "$className": "Folder",
+        "$path": "src/horse-run",
+        "$ignoreUnknownInstances": true
+      }
+    }
+  }
+}

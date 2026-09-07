@@ -1,0 +1,10 @@
+# Studio place files stay outside source control; keep separate backups.
+*.rbxl
+*.rbxlx
+.DS_Store
+Thumbs.db
+*.log
+
+# Local tools and generated verification output
+.tools/
+sourcemap.json
