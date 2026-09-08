@@ -1,6 +1,7 @@
 --!strict
 local DataStoreService=game:GetService("DataStoreService")
 local RunService=game:GetService("RunService")
+local Traits=require(game:GetService('ReplicatedStorage').Shared.HorseTraits)
 
 local PlayerStore=DataStoreService:GetDataStore("HorseCollection_v1")
 local JournalStore=DataStoreService:GetDataStore("HorseTransferJournal_v1")
@@ -23,14 +24,16 @@ end
 local function cleanHorse(raw)
 	if type(raw)~="table" or type(raw.Id)~="string" or raw.Id=="" then return nil end
 	return {Id=raw.Id,TemplateId=tostring(raw.TemplateId or "Horse1"),RarityId=tostring(raw.RarityId or "Bronze"),
+		Traits=Traits.normalize(raw.RarityId,raw.Traits,raw.Id),
 		AcquiredAt=math.max(0,math.floor(tonumber(raw.AcquiredAt) or os.time())),
 		ProtectedUntil=math.max(0,math.floor(tonumber(raw.ProtectedUntil) or 0)),Placed=raw.Placed==true}
 end
-function Collection.newData() return {Version=2,Revision=0,Horses={},ProtectedHorseId=nil} end
+function Collection.newData() return {Version=3,Revision=0,Horses={},ProtectedHorseId=nil,SaleTotal=0} end
 function Collection.normalize(raw)
 	local data=Collection.newData()
 	if type(raw)~="table" then return data end
 	data.Revision=math.max(0,math.floor(tonumber(raw.Revision) or 0))
+	data.SaleTotal=math.clamp(math.floor(tonumber(raw.SaleTotal) or 0),0,9e15)
 	local seen={}
 	for _,entry in raw.Horses or {} do
 		local horse=cleanHorse(entry)
@@ -49,6 +52,7 @@ function Collection.add(data,record)
 	local now=os.time(); local placedCount=0
 	for _,horse in data.Horses do if horse.Placed then placedCount+=1 end end
 	table.insert(data.Horses,{Id=record.Id,TemplateId=record.TemplateId or "Horse1",RarityId=record.RarityId or "Bronze",
+		Traits=Traits.normalize(record.RarityId,record.Traits,record.Id),
 		AcquiredAt=now,ProtectedUntil=now+600,Placed=placedCount<12})
 	return true
 end
@@ -171,6 +175,51 @@ function Collection.addOwnedHorse(userId:number,record)
 	return true,data
 end
 
+-- Ownership is tombstoned before collection removal; retries by the seller can finish it.
+-- SaleTotal and removal share one UpdateAsync. Credits use this cumulative total exactly once.
+function Collection.sell(userId:number,id:string)
+	local loaded,before=readPlayer(userId)
+	if not loaded then return false,before end
+	local horse=Collection.find(before,id)
+	if not horse then return false,'Missing' end
+	local denied=false
+	local ok,reason=updateOwner(id,function(raw)
+		if type(raw)=='table' and (raw.PendingTransferId or (raw.SoldBy~=userId and tonumber(raw.OwnerUserId)~=userId)) then denied=true;return nil end
+		return {OwnerUserId=0,SoldBy=userId,Sold=true,UpdatedAt=os.time()}
+	end)
+	if not ok then return false,reason end
+	if denied then return false,'NotOwner' end
+	local value=0
+	local saved,data=updatePlayer(userId,function(raw)
+		local current=Collection.normalize(raw)
+		local item=Collection.find(current,id)
+		if item then
+			value=Traits.price(item.RarityId,item.Traits,item.Id)
+			Collection.remove(current,id);current.SaleTotal+=value;current.Revision+=1
+		end
+		return current
+	end)
+	if not saved then return false,'SalePending' end
+	return true,data,value
+end
+
+function Collection.recoverSales(userId:number)
+	local ok,data=readPlayer(userId)
+	if not ok then return nil,data end
+	for _,horse in data.Horses do
+		local ownerOk,owner
+		if Collection.mode=='StudioTest' then ownerOk=true;owner=studioOwners[horse.Id]
+		else ownerOk,owner=retry(function() return OwnershipStore:GetAsync(horse.Id) end) end
+		if not ownerOk then return nil,owner end
+		if type(owner)=='table' and owner.SoldBy==userId then
+			local recovered,result=Collection.sell(userId,horse.Id)
+			if not recovered then return nil,result end
+			data=result
+		end
+	end
+	return data,nil
+end
+
 local function setJournalStage(record,stage,reason)
 	local ok,result=updateJournal(record.Id,function(raw)
 		if type(raw)~="table" or raw.Id~=record.Id then return nil end
@@ -192,6 +241,7 @@ local function continueTransfer(record)
 	if record.Stage=="Aborted" then cleanup(record); return false,record.Reason or "Aborted" end
 	local authorityDenied=false
 	local authorityOk,authorityResult=updateOwner(record.HorseId,function(raw)
+		if type(raw)=='table' and raw.Sold then authorityDenied=true;return nil end
 		local ownerId=type(raw)=="table" and tonumber(raw.OwnerUserId) or nil
 		local pending=type(raw)=="table" and raw.PendingTransferId or nil
 		local completed=type(raw)=="table" and raw.LastTransferId==record.Id
@@ -237,7 +287,7 @@ local function continueTransfer(record)
 			if existing.TemplateId~=record.TemplateId or existing.RarityId~=record.RarityId then addReason="DuplicateMismatch"; return nil end
 			return data
 		end
-		local added,reason=Collection.add(data,{Id=record.HorseId,TemplateId=record.TemplateId,RarityId=record.RarityId})
+		local added,reason=Collection.add(data,{Id=record.HorseId,TemplateId=record.TemplateId,RarityId=record.RarityId,Traits=record.Traits})
 		if not added then addReason=reason; return nil end
 		data.Revision+=1; return data
 	end)
@@ -260,6 +310,7 @@ end
 function Collection.transferOwnership(id:string,ownerUserId:number,thiefUserId:number,horse)
 	if ownerUserId==thiefUserId or type(id)~="string" or type(horse)~="table" then return false,"InvalidTransfer" end
 	local record={Id=id,Stage="Prepared",OwnerUserId=ownerUserId,ThiefUserId=thiefUserId,HorseId=horse.Id,
+		Traits=Traits.normalize(horse.RarityId,horse.Traits,horse.Id),
 		TemplateId=horse.TemplateId,RarityId=horse.RarityId,AuthorizedAt=os.time(),CreatedAt=os.time(),UpdatedAt=os.time()}
 	local mismatch=false
 	local ok,result=updateJournal(id,function(raw)
@@ -293,6 +344,7 @@ function Collection.clientData(data)
 	local list={}
 	for _,horse in data.Horses do
 		table.insert(list,{id=horse.Id,templateId=horse.TemplateId,rarityId=horse.RarityId,placed=horse.Placed,
+			speed=horse.Traits.Speed,stamina=horse.Traits.Stamina,ability=horse.Traits.Ability,salePrice=Traits.price(horse.RarityId,horse.Traits,horse.Id),
 			protected=data.ProtectedHorseId==horse.Id,newProtectionLeft=math.max(0,horse.ProtectedUntil-os.time())})
 	end
 	return {horses=list,protectedHorseId=data.ProtectedHorseId,maxPlaced=12,saveMode=Collection.mode}

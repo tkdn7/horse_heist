@@ -8,6 +8,8 @@ local Shared=ReplicatedStorage:WaitForChild("Shared")
 local HorseRarity=require(Shared:WaitForChild("HorseRarity"))
 local ChaseConfig=require(Shared:WaitForChild("ChaseConfig"))
 local Visual=require(ReplicatedStorage.HorseRun.FarmVisual)
+local Traits=require(Shared.HorseTraits)
+local Guards=require(script.Parent.GuardService)
 local random=Random.new()
 local SLOT_COUNT=6
 local function folder(parent:Instance,name:string):Folder
@@ -29,6 +31,7 @@ assert(npcFarm:IsA("Folder"))
 npcFarm:SetAttribute("SlotCount",SLOT_COUNT)
 npcFarm:SetAttribute("ManagedBy","NpcFarmService")
 Visual.npc(npcFarm)
+Guards.farmer(npcFarm)
 local function position(index:number):CFrame return Visual.npcSlot(index) end
 local function ensureSlot(index:number):Model
 	local found=npcFarm:FindFirstChild("Slot"..index)
@@ -76,7 +79,7 @@ local function addPrompt(slot:Model,rarity)
 	if not pad or not pad:IsA("BasePart") then return end
 	local old=pad:FindFirstChild("StealPrompt"); if old then old:Destroy() end
 	local prompt=Instance.new("ProximityPrompt"); prompt.Name="StealPrompt"; prompt.ActionText="훔치기"
-	prompt.ObjectText=rarity.DisplayName.." 말"; prompt.HoldDuration=rarity.StealHoldSeconds
+	prompt.ObjectText=rarity.DisplayName.." 말 · 안전 대기 후 탈출"; prompt.HoldDuration=0
 	prompt.MaxActivationDistance=10; prompt.RequiresLineOfSight=false
 	prompt.Enabled=slot:GetAttribute("Occupied")==true; prompt.Parent=pad; connect(slot,prompt)
 end
@@ -87,9 +90,11 @@ local function populate(slot:Model)
 	slot:SetAttribute("Occupied",true); slot:SetAttribute("LockedBy",nil)
 	slot:SetAttribute("HorseId",HttpService:GenerateGUID(false)); slot:SetAttribute("TemplateId",templateName)
 	slot:SetAttribute("RarityId",rarity.Id); slot:SetAttribute("StealHoldSeconds",rarity.StealHoldSeconds)
+	local traits=Traits.roll(rarity.Id,random)
+	slot:SetAttribute('Speed',traits.Speed);slot:SetAttribute('Stamina',traits.Stamina);slot:SetAttribute('Ability',traits.Ability)
 	slot:SetAttribute("EscapeSeconds",rarity.EscapeSeconds)
 	slot:SetAttribute("MinimumObstacleGapSeconds",rarity.MinimumObstacleGapSeconds)
-	setLabel(slot,rarity.DisplayName,rarity.Color)
+	setLabel(slot,rarity.DisplayName..' · 속도 '..traits.Speed..' / 체력 '..traits.Stamina..'\n능력: '..Traits.AbilityNames[traits.Ability],rarity.Color)
 	local pad=slot:FindFirstChild("DisplayPad")
 	if pad and pad:IsA("BasePart") then
 		local horse=Visual.display(slot,"DisplayHorse",templateName,pad.CFrame)

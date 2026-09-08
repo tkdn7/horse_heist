@@ -10,6 +10,7 @@ local Runner = require(Shared.Runner)
 local Progression = require(Shared.Progression)
 local PlayerStore = require(Shared.DataStore)
 local HorseRarity = require(GlobalShared:WaitForChild('HorseRarity'))
+local Traits = require(GlobalShared:WaitForChild('HorseTraits'))
 local ChaseConfig = require(GlobalShared:WaitForChild('ChaseConfig'))
 local ServerModules = ServerScriptService:WaitForChild('Server')
 local HorseCollectionStore = require(ServerModules:WaitForChild('HorseCollectionStore'))
@@ -32,6 +33,13 @@ local chaseRequest = signal('NpcHorseChaseRequest', 'BindableFunction')
 local chaseResolved = signal('NpcHorseChaseResolved', 'BindableEvent')
 
 local function send(player, kind, data)
+    if kind=='State' then
+        local run=sessions[player] and sessions[player].run
+        if run then
+            data.ability=run.ability;data.abilityReadyAt=run.abilityReadyAt
+            data.jumpFrom=run.jumpFrom;data.jumpCount=run.jumpCount
+        end
+    end
     if player.Parent then Remote:FireClient(player, kind, data) end
 end
 
@@ -50,6 +58,7 @@ end
 
 local function sendCollection(player, session, result)
     local payload = HorseCollectionStore.clientData(session.horseData)
+    payload.guardDog=session.data.GuardDog;payload.dogPrice=Traits.DogPrice
     payload.result = result
     CollectionRemote:FireClient(player, 'Collection', payload)
 end
@@ -60,11 +69,13 @@ local function markDirty(session)
 end
 
 local function saveSession(player, session, reason)
+    if session and session.economyBusy and reason~='EconomyPreflight' then return false end
     if not session or session.saving or not session.dirty then return true end
     if not session.canSave then return false end
     session.saving = true
     local revision = session.revision
     local ok, err = PlayerStore.save(player.UserId, session.data)
+    if ok then session.data.StoreRevision=err.StoreRevision end
     if ok and session.revision == revision then session.dirty = false end
     session.saving = false
     if player.Parent then
@@ -92,6 +103,7 @@ local function saveHorseSession(player, session, reason)
 end
 
 local function restore(player)
+    player:SetAttribute('TheftProtected',false)
     local character = player.Character
     local root = character and character:FindFirstChild('HumanoidRootPart')
     if root then
@@ -118,8 +130,12 @@ local function setup(player)
     end
     local _, recoveryError = HorseCollectionStore.recover(player.UserId)
     if recoveryError then warn('[HorseTransfer] Recovery pending for '..player.UserId..': '..tostring(recoveryError)) end
-    local horseData, horseLoadError = HorseCollectionStore.load(player.UserId)
+    local horseData, horseLoadError = HorseCollectionStore.recoverSales(player.UserId)
     if not horseData then horseData = HorseCollectionStore.newData() end
+    if not loadError and not horseLoadError and horseData.SaleTotal>data.SaleCreditTotal then
+        local credited,result=PlayerStore.creditSales(player.UserId,horseData.SaleTotal)
+        if credited then data=result else loadError=result end
+    end
     local session = {
         phase = 'Lobby', data = data, lastRequest = 0,
         budget = 30, budgetAt = os.clock(), serial = 0,
@@ -130,6 +146,7 @@ local function setup(player)
     sessions[player] = session
     sendProfile(player, session)
     PlayerFarm.render(player, horseData)
+    if data.GuardDog then PlayerFarm.hireDog(player,horseData) end
     if player.Character then restore(player) end
     sendCollection(player, session)
     if loadError then send(player, 'SaveStatus', {ok = false, mode = PlayerStore.mode, reason = 'Load'}) end
@@ -165,6 +182,7 @@ local function finish(player, session, reason)
                 session.horseSaving = true
                 added, result = HorseCollectionStore.addOwnedHorse(player.UserId, {
                     Id = target.horseId, TemplateId = target.horseName, RarityId = target.rarityId,
+                    Traits = target.traits,
                 })
                 session.horseSaving = false
             end
@@ -187,6 +205,11 @@ local function finish(player, session, reason)
             serial = session.serial,
         })
         session.chaseTarget = nil
+        if reason=='Captured' then
+            player:SetAttribute('TheftProtected',false)
+            local hum=player.Character and player.Character:FindFirstChildOfClass('Humanoid')
+            if hum then hum.Health=0 end
+        end
         return
     end
     local money, exp = Runner.reward(session.run)
@@ -205,9 +228,10 @@ local function finish(player, session, reason)
     task.spawn(saveSession, player, session, 'Run')
 end
 
-local function startRun(player, chaseTarget)
+local function startRun(player, chaseTarget, ownedHorse)
     local session = sessions[player]
     if not session or (session.phase ~= 'Lobby' and session.phase ~= 'Results') then return end
+    if session.economyBusy or session.pvpEvent or pvpByPlayer[player] or not session.horseCanSave or not session.canSave then return end
     if os.clock() - session.lastRequest < .75 then return end
     local character = player.Character
     local root = character and character:FindFirstChild('HumanoidRootPart')
@@ -215,13 +239,17 @@ local function startRun(player, chaseTarget)
     if not root or not humanoid or humanoid.Health <= 0 then return end
     session.lastRequest = os.clock()
     root.Anchored = true
+    player:SetAttribute('TheftProtected',true)
+    -- Real avatars wait away from guards while the client renders the course and mounted rider.
+    character:PivotTo(CFrame.new(7000+player.UserId%1000*12,120,0))
     local stats
     local rarity
     if chaseTarget then
         rarity = HorseRarity.get(chaseTarget.rarityId)
+        local individual=Traits.normalize(chaseTarget.rarityId,chaseTarget.traits,chaseTarget.horseId)
         local seed = Random.new():NextInteger(1, 1000000)
         stats = {
-            mode = 'Chase', speed = ChaseConfig.BaseSpeed, maxHealth = Config.MaxHealth,
+            mode = 'Chase', speed = individual.Speed, maxHealth = individual.Stamina, ability=individual.Ability,
             goalDistance = ChaseConfig.BaseSpeed * rarity.EscapeSeconds,
             pursuerGap = ChaseConfig.InitialNpcGap,
             maximumPursuerGap = ChaseConfig.MaximumNpcGap,
@@ -232,18 +260,19 @@ local function startRun(player, chaseTarget)
         }
         session.chaseTarget = chaseTarget
     else
-        stats = Progression.stats(session.data)
+        stats = ownedHorse and {speed=ownedHorse.Traits.Speed,maxHealth=ownedHorse.Traits.Stamina,ability=ownedHorse.Traits.Ability} or Progression.stats(session.data)
         session.chaseTarget = nil
     end
     session.phase = 'Countdown'
     session.run = Runner.new(stats)
-    session.startAt = workspace:GetServerTimeNow() + Config.Countdown
+    session.startAt = workspace:GetServerTimeNow() + Config.Countdown + (rarity and rarity.StealHoldSeconds or 0)
     session.serial += 1
     send(player, 'Start', {startAt = session.startAt, serial = session.serial,
         speed = stats.speed, maxHealth = stats.maxHealth, chase = chaseTarget ~= nil,
         goalDistance = stats.goalDistance, pursuerGap = stats.pursuerGap,
         rarityId = rarity and rarity.Id, rarityName = rarity and rarity.DisplayName,
-        horseName = chaseTarget and chaseTarget.horseName, course = stats.course})
+        horseName = chaseTarget and chaseTarget.horseName or (ownedHorse and ownedHorse.TemplateId), course = stats.course,
+        ability=stats.ability,stealSeconds=rarity and rarity.StealHoldSeconds or 0})
 end
 
 chaseRequest.OnInvoke = function(player, target)
@@ -251,6 +280,12 @@ chaseRequest.OnInvoke = function(player, target)
     local slot = target.slot
     if typeof(slot) ~= 'Instance' or not slot:IsDescendantOf(workspace) then return false end
     if slot:GetAttribute('Occupied') ~= true or slot:GetAttribute('LockedBy') ~= player.UserId then return false end
+    local root=player.Character and player.Character:FindFirstChild('HumanoidRootPart')
+    local pad=slot:FindFirstChild('DisplayPad')
+    if not root or not pad or (root.Position-pad.Position).Magnitude>14 then return false end
+    -- The slot is the server-owned source of identity and rolled values.
+    target.horseId=slot:GetAttribute('HorseId');target.horseName=slot:GetAttribute('TemplateId');target.rarityId=slot:GetAttribute('RarityId')
+    target.traits={Speed=slot:GetAttribute('Speed'),Stamina=slot:GetAttribute('Stamina'),Ability=slot:GetAttribute('Ability')}
     local before = sessions[player] and sessions[player].serial
     startRun(player, target)
     local session = sessions[player]
@@ -263,6 +298,8 @@ local function anchorForRun(player)
     local humanoid = character and character:FindFirstChildWhichIsA('Humanoid')
     if not root or not humanoid or humanoid.Health <= 0 then return false end
     root.Anchored = true
+    player:SetAttribute('TheftProtected',true)
+    character:PivotTo(CFrame.new(7000+player.UserId%1000*12,120,0))
     return true
 end
 
@@ -302,7 +339,7 @@ end
 local function pvpStartPayload(event, role, run)
     return {
         startAt = event.startAt, serial = sessions[role == 'Thief' and event.thief or event.owner].serial,
-        speed = ChaseConfig.BaseSpeed, maxHealth = Config.MaxHealth, chase = true, pvpRole = role,
+        speed = run.speed, maxHealth = run.maxHealth, ability=run.ability, chase = true, pvpRole = role,
         initialDistance = run.distance, goalDistance = event.goalDistance, pursuerGap = ChaseConfig.OwnerInitialGap,
         rarityId = event.rarityId, rarityName = HorseRarity.get(event.rarityId).DisplayName,
         horseName = event.templateId, course = event.course,
@@ -325,8 +362,8 @@ local function startPvp(event, ownerJoined)
     event.goalDistance = ChaseConfig.BaseSpeed * HorseRarity.get(event.rarityId).EscapeSeconds
     event.gapAdjustment = 0; event.catchHeld = 0; event.boostReadyAt = 0; event.boostUntil = 0
     thiefSession.phase = 'Countdown'; thiefSession.serial += 1
-    thiefSession.run = Runner.new({mode = ownerJoined and 'PvP' or 'Chase', speed = ChaseConfig.BaseSpeed,
-        maxHealth = Config.MaxHealth, goalDistance = event.goalDistance, pursuerGap = ChaseConfig.OwnerInitialGap,
+    thiefSession.run = Runner.new({mode = ownerJoined and 'PvP' or 'Chase', speed = event.traits.Speed,
+        maxHealth = event.traits.Stamina, ability=event.traits.Ability,goalDistance = event.goalDistance, pursuerGap = ChaseConfig.OwnerInitialGap,
         maximumPursuerGap = ChaseConfig.OwnerInitialGap, hitGapPenalty = ChaseConfig.HitGapPenalty,
         gapRecoveryDelay = ChaseConfig.GapRecoveryDelay, gapRecoveryPerSecond = ChaseConfig.GapRecoveryPerSecond,
         course = event.course})
@@ -407,12 +444,17 @@ end
 PlayerFarm.setStealHandler(function(thief, owner, horseId, pad)
     local thiefSession, ownerSession = sessions[thief], sessions[owner]
     if thief == owner or not thiefSession or not ownerSession then return false end
+    if thiefSession.economyBusy or ownerSession.economyBusy or not thiefSession.horseCanSave or not ownerSession.horseCanSave then return false end
     if thiefSession.phase ~= 'Lobby' or ownerSession.phase ~= 'Lobby' or pvpByPlayer[thief] or pvpByPlayer[owner] then return false end
     local horse = HorseCollectionStore.find(ownerSession.horseData, horseId)
     if not horse or not horse.Placed or HorseCollectionStore.isProtected(ownerSession.horseData, horseId) then return false end
     if pad:GetAttribute('HorseId') ~= horseId or pad:GetAttribute('ActiveStealId') then return false end
+    local root=thief.Character and thief.Character:FindFirstChild('HumanoidRootPart')
+    local hum=thief.Character and thief.Character:FindFirstChildOfClass('Humanoid')
+    if not root or not hum or hum.Health<=0 or (root.Position-pad.Position).Magnitude>14 then return false end
     local event = {id = HttpService:GenerateGUID(false), state = 'Pending', thief = thief, owner = owner,
         horseId = horse.Id, templateId = horse.TemplateId, rarityId = horse.RarityId, pad = pad,
+        traits=table.clone(horse.Traits),
         deadline = workspace:GetServerTimeNow() + ChaseConfig.JoinWindowSeconds}
     pvpEvents[event.id] = event; pvpByPlayer[thief] = event; pvpByPlayer[owner] = event
     thiefSession.pvpEvent = event; ownerSession.pvpEvent = event
@@ -427,6 +469,7 @@ end)
 Remote.OnServerEvent:Connect(function(player, action, argument)
     local session = sessions[player]
     if not session or type(action) ~= 'string' then return end
+    if session.economyBusy then return end
     if session.phase == 'Running' and (action == 'Left' or action == 'Right') then
         if type(argument) ~= 'number' or argument ~= argument or math.abs(argument) == math.huge
             or argument % 1 ~= 0 or argument <= session.run.laneSequence then return end
@@ -491,6 +534,39 @@ CollectionRemote.OnServerEvent:Connect(function(player, action, horseId, value)
     local session = sessions[player]
     if not session or session.phase ~= 'Lobby' or type(action) ~= 'string' then return end
     if action == 'Ready' then sendCollection(player, session); return end
+    if session.economyBusy or session.pvpEvent or pvpByPlayer[player] or session.horseSaving or session.saving then return end
+    if not session.horseCanSave or not session.canSave then sendCollection(player,session,'SaveUnavailable');return end
+    if action=='Ride' and type(horseId)=='string' then
+        local horse=HorseCollectionStore.find(session.horseData,horseId)
+        if horse then startRun(player,nil,horse) end
+        return
+    end
+    if action=='Sell' or action=='HireDog' then
+        if action=='Sell' and (type(horseId)~='string' or not HorseCollectionStore.find(session.horseData,horseId)) then return end
+        session.economyBusy=true
+        local ok,result=pcall(function()
+            if not saveSession(player,session,'EconomyPreflight') or not saveHorseSession(player,session,'EconomyPreflight') then return 'SaveUnavailable' end
+            if action=='Sell' then
+                local sold,data=HorseCollectionStore.sell(player.UserId,horseId)
+                if not sold then return data end
+                session.horseData=data;session.horseDirty=false;session.horseRevision+=1
+                PlayerFarm.render(player,data)
+                local credited,profile=PlayerStore.creditSales(player.UserId,data.SaleTotal)
+                if not credited then session.canSave=false;return 'CreditPending' end
+                session.data=profile;session.dirty=false
+                return 'Sold'
+            end
+            local purchased,profile=PlayerStore.hireDog(player.UserId,Traits.DogPrice)
+            if not purchased then return profile end
+            session.data=profile;session.dirty=false
+            PlayerFarm.hireDog(player,session.horseData)
+            return 'DogHired'
+        end)
+        session.economyBusy=false
+        if not ok then warn('[HorseEconomy] '..tostring(result));result='SaveUnavailable' end
+        sendProfile(player,session);sendCollection(player,session,result)
+        return
+    end
     if type(horseId) ~= 'string' then return end
     local ok, reason
     if action == 'SetPlaced' then
@@ -521,7 +597,7 @@ RunService.Heartbeat:Connect(function(dt)
             if event.state == 'RunningPlayers' then
                 if not ownerSession or not ownerSession.run then cancelPvp(event, 'PlayerLeft'); continue end
                 if ownerSession.phase == 'Countdown' then ownerSession.phase = 'Running'; send(event.owner, 'Running', {}) end
-                ownerSession.run.speed = ChaseConfig.BaseSpeed * (workspace:GetServerTimeNow() < event.boostUntil and ChaseConfig.OwnerBoostMultiplier or 1)
+                ownerSession.run.externalBoost = workspace:GetServerTimeNow() < event.boostUntil and ChaseConfig.OwnerBoostMultiplier or 1
                 local thiefEvents = Runner.step(thiefSession.run, dt)
                 local ownerEvents = Runner.step(ownerSession.run, dt)
                 for _, item in thiefEvents do send(event.thief, 'Effect', item); if item.kind == 'Hit' then event.gapAdjustment -= ChaseConfig.HitGapPenalty end end

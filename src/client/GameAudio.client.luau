@@ -3,11 +3,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 local TweenService = game:GetService("TweenService")
 local ContentProvider = game:GetService("ContentProvider")
+local GuardConfig=require(ReplicatedStorage.Shared.GuardConfig)
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local DEFINITIONS = {
+    FarmerAngry = {id=GuardConfig.AngrySound,volume=GuardConfig.VoiceVolume},
 	Click = {id = "rbxassetid://88442833509532", volume = 0.28},
 	Footsteps = {id = "rbxassetid://18438190442", volume = 0.3, looped = true},
 	Gallop = {id = "rbxassetid://118636555040923", volume = 0.2, looped = true},
@@ -78,6 +80,8 @@ end
 local horseGui
 local phase = "Lobby"
 local lastMotion = "Idle"
+local farmerChase=false
+local lastAngry=-10
 
 local function updatePhase()
 	phase = horseGui and horseGui:GetAttribute("Phase") or "Lobby"
@@ -153,17 +157,29 @@ local horseRun = ReplicatedStorage:WaitForChild("HorseRun", 10)
 local remote = horseRun and horseRun:FindFirstChild("Event")
 if remote then
 	remote.OnClientEvent:Connect(function(kind, data)
+		if kind=='Start' then farmerChase=data.chase==true and data.pvpRole~='Owner';lastAngry=-10 end
 		if kind == "Effect" and data then
 			if data.kind == "Carrot" then play("Pickup", 1.04)
 			elseif data.kind == "Hit" then play("Hit", 0.94) end
 		elseif kind == "Result" then
+			sounds.FarmerAngry:Stop();farmerChase=false
 			setLoop("Gallop", false)
 			if data and data.chase and not data.success then play("Hit", 0.8) else play("Success", 1) end
 		elseif kind == "Lobby" then
+			sounds.FarmerAngry:Stop();farmerChase=false
 			setLoop("Gallop", false)
 		end
 	end)
 end
+
+task.spawn(function()
+    while folder.Parent do
+        if farmerChase and phase=='Running' and os.clock()-lastAngry>=GuardConfig.VoiceInterval then
+            play('FarmerAngry',.94+math.random()*.1);lastAngry=os.clock()
+        end
+        task.wait(.25)
+    end
+end)
 
 task.spawn(function()
 	local ok, err = pcall(function()

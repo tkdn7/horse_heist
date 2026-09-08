@@ -5,6 +5,9 @@ function Progression.newData()
     return {
         Version = Config.Version,
         Money = Config.InitialMoney,
+        SaleCreditTotal = 0,
+        StoreRevision = 0,
+        GuardDog = false,
         Level = 1,
         Exp = 0,
         BestDistance = 0,
@@ -26,6 +29,9 @@ function Progression.normalize(raw)
     local data = Progression.newData()
     if type(raw) ~= 'table' then return data end
     data.Money = integer(raw.Money, data.Money, 0, 9e15)
+    data.SaleCreditTotal=integer(raw.SaleCreditTotal,0,0,9e15)
+    data.StoreRevision=integer(raw.StoreRevision,0,0,9e15)
+    data.GuardDog=raw.GuardDog==true
     data.Level = integer(raw.Level, data.Level, 1, Config.MaxLevel)
     data.Exp = integer(raw.Exp, data.Exp, 0, 9e15)
     data.BestDistance = integer(raw.BestDistance or (raw.Stats and raw.Stats.BestDistance), 0, 0, 9e15)

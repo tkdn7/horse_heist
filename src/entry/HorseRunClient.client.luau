@@ -6,6 +6,7 @@ local Shared=game:GetService('ReplicatedStorage'):WaitForChild('HorseRun')
 local Config=require(Shared.Config)
 local Course=require(Shared.Course)
 local Horse=require(Shared.Horse)
+local Traits=require(game:GetService('ReplicatedStorage').Shared.HorseTraits)
 local World=require(Shared.World)
 local Characters=require(Shared.Characters)
 local Remote=Shared:WaitForChild('Event')
@@ -31,6 +32,8 @@ local track,horse,farmer
 local farmerX=0;local farmerGap=24
 local chunks,rows,carrotModels={},{},{}
 local collectedCarrots={}
+local brokenObstacles={}
+local jumpFrom=0;local jumpCount=0
 local laneSequence=0; local pendingLanes={}; local lastLaneInput=-math.huge
 local courseSettings=nil
 local chaseRarityName=nil
@@ -79,7 +82,7 @@ local expText=text('Exp',levelCard,'0 / 100 EXP',UDim2.fromOffset(91,11),UDim2.n
 local expTrack=frame('ExpTrack',levelCard,UDim2.fromOffset(14,45),UDim2.new(1,-28,0,13),Color3.fromRGB(222,229,207))
 local expFill=frame('ExpFill',expTrack,UDim2.new(),UDim2.fromScale(0,1),GOLD)
 
-local hint=text('LobbyHint',gui,'W A S D 이동  ·  마우스로 시점 회전\nNPC 말 앞에서 E키를 꾹 눌러 훔치기',UDim2.new(.5,-200,1,-74),UDim2.fromOffset(400,46),nil,PAPER)
+local hint=text('LobbyHint',gui,'W A S D 이동  ·  마우스로 시점 회전\nNPC 말 앞에서 E키 → 안전 대기 후 탈출',UDim2.new(.5,-200,1,-74),UDim2.fromOffset(400,46),nil,PAPER)
 local sessionNote=text('SessionNote',gui,'STUDIO TEST · 실제 운영 저장 데이터와 분리됨',UDim2.new(.5,-260,1,-22),UDim2.fromOffset(520,17),nil,GREEN)
 local trainingShortcut=button('TrainingShortcut',gui,'훈련  ↑',UDim2.new(1,-144,1,-74),UDim2.fromOffset(124,48),function() Remote:FireServer('OpenTraining') end,GOLD)
 
@@ -113,7 +116,13 @@ local function action(which)
         Remote:FireServer(which,laneSequence)
         return
     elseif which=='Jump' then
-        if not sliding and elapsed-jumpAt>=Config.JumpCooldown then jumpAt=elapsed else return end
+        if sliding then return end
+        if state.ability=='DoubleJump' and airborne and jumpCount==1 and elapsed-jumpAt>=.16 then
+            local progress=(elapsed-jumpAt)/Config.JumpDuration
+            jumpFrom=jumpFrom*(1-progress)+math.sin(progress*math.pi)*Config.JumpHeight
+            jumpAt=elapsed;jumpCount=2
+        elseif elapsed-jumpAt>=Config.JumpCooldown then jumpAt=elapsed;jumpFrom=0;jumpCount=1
+        else return end
     elseif which=='Slide' then
         if not airborne and elapsed-slideAt>=Config.SlideCooldown then slideAt=elapsed else return end
     end
@@ -136,6 +145,9 @@ button('RightButton',runControls,'▶',UDim2.new(0,115,1,-102),UDim2.fromOffset(
 button('SlideButton',runControls,'슬라이드 ↓',UDim2.new(1,-248,1,-102),UDim2.fromOffset(106,70),function() action('Slide') end)
 button('JumpButton',runControls,'점프 ↑',UDim2.new(1,-132,1,-102),UDim2.fromOffset(106,70),function() action('Jump') end,GOLD)
 button('EndButton',runControls,'런 마치기',UDim2.new(1,-132,0,104),UDim2.fromOffset(108,34),function() Remote:FireServer('End') end)
+local abilityButton=button('AbilityButton',runControls,'능력 · Q',UDim2.new(1,-190,1,-165),UDim2.fromOffset(165,44),function() action('Ability') end,GOLD)
+abilityButton.TextSize=14
+local safetyNotice=text('SafetyNotice',gui,'안전 구역에서 말을 데려오는 중',UDim2.new(.5,-220,.35,70),UDim2.fromOffset(440,30),Enum.Font.GothamBold,PAPER)
 local runHint=text('RunHint',runControls,'A / D  ·  SPACE  ·  S',UDim2.new(.5,-120,1,-67),UDim2.fromOffset(240,20),nil,PAPER)
 
 local shade=frame('ResultShade',gui,UDim2.fromScale(0,0),UDim2.fromScale(1,1),Color3.fromRGB(10,30,22)); shade.BackgroundTransparency=.25
@@ -225,6 +237,7 @@ local function visibility()
     hud.Visible=phase=='Running' or phase=='Countdown'
     runControls.Visible=phase=='Running'
     countdown.Visible=phase=='Countdown'
+    safetyNotice.Visible=phase=='Countdown' and state.chase==true
     shade.Visible=phase=='Results'; feedback.Visible=phase=='Running'
     if phase~='Lobby' then trainingShade.Visible=false end
     layout()
@@ -234,6 +247,7 @@ local function clearTrack()
     if horse then Horse.clear(horse) end
     if track then track:Destroy() end
     track=nil; horse=nil; farmer=nil; chunks={}; rows={}; carrotModels={}; collectedCarrots={}
+    brokenObstacles={};jumpFrom=0;jumpCount=0
     laneSequence=0; pendingLanes={}; lastLaneInput=-math.huge
 end
 local function localPart(parent,name,size,position,color,material,shape)
@@ -269,23 +283,26 @@ end
 local function createRow(row)
     local model=Instance.new('Model'); model.Name='Row'..row.index; model.Parent=track
     for _,l in row.lanes do
+        local key=row.index..':'..l
+        if brokenObstacles[key] then continue end
+        local obstacle=Instance.new('Folder');obstacle.Name='Obstacle_'..key;obstacle.Parent=model
         local x=l*Config.LaneWidth
         if row.kind=='Fence' then
             for _,side in {-1,1} do
-                localPart(model,'FencePost',Vector3.new(.6,3.6,.65),Vector3.new(x+side*3,1.8,-row.distance),Color3.fromRGB(120,76,44),Enum.Material.Wood)
+                localPart(obstacle,'FencePost',Vector3.new(.6,3.6,.65),Vector3.new(x+side*3,1.8,-row.distance),Color3.fromRGB(120,76,44),Enum.Material.Wood)
             end
             for _,y in {1.3,2.6} do
-                localPart(model,'JumpRail',Vector3.new(6.5,.65,.6),Vector3.new(x,y,-row.distance),Color3.fromRGB(244,202,103),Enum.Material.Wood)
+                localPart(obstacle,'JumpRail',Vector3.new(6.5,.65,.6),Vector3.new(x,y,-row.distance),Color3.fromRGB(244,202,103),Enum.Material.Wood)
             end
         elseif row.kind=='Log' then
             for h=0,3 do
-                localPart(model,'StackedLog',Vector3.new(7,2.2,2.2),Vector3.new(x,1.1+h*2,-row.distance),Color3.fromRGB(111+h*7,75+h*3,45),Enum.Material.Wood,Enum.PartType.Cylinder)
+                localPart(obstacle,'StackedLog',Vector3.new(7,2.2,2.2),Vector3.new(x,1.1+h*2,-row.distance),Color3.fromRGB(111+h*7,75+h*3,45),Enum.Material.Wood,Enum.PartType.Cylinder)
             end
         else
-            localPart(model,'BranchPostLeft',Vector3.new(.7,6,.7),Vector3.new(x-3.1,3,-row.distance),Color3.fromRGB(91,62,39),Enum.Material.Wood)
-            localPart(model,'BranchPostRight',Vector3.new(.7,6,.7),Vector3.new(x+3.1,3,-row.distance),Color3.fromRGB(91,62,39),Enum.Material.Wood)
-            localPart(model,'LowBranch',Vector3.new(7,.8,1.1),Vector3.new(x,4.1,-row.distance),Color3.fromRGB(79,104,49),Enum.Material.Wood)
-            localPart(model,'BranchLeaves',Vector3.new(6.2,1.2,1.5),Vector3.new(x,4.55,-row.distance),Color3.fromRGB(75,130,62),Enum.Material.Grass,Enum.PartType.Ball)
+            localPart(obstacle,'BranchPostLeft',Vector3.new(.7,6,.7),Vector3.new(x-3.1,3,-row.distance),Color3.fromRGB(91,62,39),Enum.Material.Wood)
+            localPart(obstacle,'BranchPostRight',Vector3.new(.7,6,.7),Vector3.new(x+3.1,3,-row.distance),Color3.fromRGB(91,62,39),Enum.Material.Wood)
+            localPart(obstacle,'LowBranch',Vector3.new(7,.8,1.1),Vector3.new(x,4.1,-row.distance),Color3.fromRGB(79,104,49),Enum.Material.Wood)
+            localPart(obstacle,'BranchLeaves',Vector3.new(6.2,1.2,1.5),Vector3.new(x,4.55,-row.distance),Color3.fromRGB(75,130,62),Enum.Material.Grass,Enum.PartType.Ball)
         end
     end
     for _,carrot in row.carrots do
@@ -396,6 +413,7 @@ Remote.OnClientEvent:Connect(function(kind,data)
         farmerX=0;farmerGap=data.pursuerGap or 24
         local initialDistance=data.initialDistance or 0
         state={distance=initialDistance,elapsed=0,health=data.maxHealth,maxHealth=data.maxHealth,speed=data.speed,carrots=0,lane=0,jumpAt=-10,slideAt=-10,serverTime=workspace:GetServerTimeNow(),chase=data.chase,pvpRole=data.pvpRole,goalDistance=data.goalDistance,pursuerGap=data.pursuerGap}
+        state.ability=data.ability or 'None';state.abilityReadyAt=0
         if data.pvpRole=='Owner' then courseLabel.Text='내 말을 지키는 추격 · 3m 이내를 유지하면 체포'
         elseif data.pvpRole=='Thief' then courseLabel.Text=(data.rarityName or '상대')..' 말 탈출 · 결승선까지 도망치세요'
         else courseLabel.Text=data.chase and ((data.rarityName or 'NPC')..' 말 탈출 · 추격 거리 0이면 체포') or '초원 코스  ·  체력 0이 되면 런 종료' end
@@ -419,12 +437,21 @@ Remote.OnClientEvent:Connect(function(kind,data)
             end
         end
         pendingLanes=remaining; lane=predicted
-        if data.jumpAt>jumpAt or data.elapsed-jumpAt>Config.JumpDuration then jumpAt=data.jumpAt end
+        if data.jumpAt>jumpAt or data.elapsed-jumpAt>Config.JumpDuration then
+            jumpAt=data.jumpAt;jumpFrom=data.jumpFrom or 0;jumpCount=data.jumpCount or 0
+        end
         local serverSlideAt=data.slideAt or -10
         if serverSlideAt>slideAt or data.elapsed-slideAt>Config.SlideDuration then slideAt=serverSlideAt end
         gui:SetAttribute('SlideAt',slideAt)
     elseif kind=='Effect' then
-        if data.kind=='Carrot' then
+        if data.kind=='Broken' then
+            brokenObstacles[data.id]=true
+            local row=rows[data.row];local obstacle=row and row:FindFirstChild('Obstacle_'..data.id)
+            if obstacle then obstacle:Destroy() end
+            feedback.Text='장애물 파괴!';feedback.TextColor3=GOLD;feedbackUntil=os.clock()+1
+        elseif data.kind=='Ability' then
+            feedback.Text='질주! 3초간 속도 +25%';feedback.TextColor3=GOLD;feedbackUntil=os.clock()+1.5
+        elseif data.kind=='Carrot' then
             collectedCarrots[data.id]=true
             local model=carrotModels[data.id]; if model then model:Destroy(); carrotModels[data.id]=nil end
             feedback.Text=state.chase and '당근 +1' or '당근 +1  ·  체력 +1'; feedback.TextColor3=GOLD; feedbackUntil=os.clock()+.7
@@ -466,6 +493,7 @@ Input.InputBegan:Connect(function(input,processed)
     elseif key==Enum.KeyCode.D or key==Enum.KeyCode.Right or key==Enum.KeyCode.DPadRight then action('Right')
     elseif key==Enum.KeyCode.Space or key==Enum.KeyCode.Up or key==Enum.KeyCode.ButtonA then action('Jump')
     elseif key==Enum.KeyCode.S or key==Enum.KeyCode.Down or key==Enum.KeyCode.ButtonB then action('Slide') end
+    if key==Enum.KeyCode.Q or key==Enum.KeyCode.ButtonX then action('Ability') end
 end)
 Input.TouchSwipe:Connect(function(direction,_,processed)
     if processed then return end
@@ -490,7 +518,7 @@ RunService.RenderStepped:Connect(function(dt)
     local lean=math.clamp((targetX-visualX)/Config.LaneWidth,-1,1)
     visualX+=(targetX-visualX)*(1-math.exp(-18*dt))
     local progress=(elapsed-jumpAt)/Config.JumpDuration
-    local height=progress>=0 and progress<=1 and math.sin(progress*math.pi)*Config.JumpHeight or 0
+    local height=progress>=0 and progress<=1 and (jumpFrom*(1-progress)+math.sin(progress*math.pi)*Config.JumpHeight) or 0
     local airborne=height>0.05
     if airborne then
         wasAirborne=true
@@ -542,6 +570,11 @@ RunService.RenderStepped:Connect(function(dt)
     end
     gui:SetAttribute('Distance',math.floor(visualDistance)); gui:SetAttribute('Health',state.health)
     gui:SetAttribute('Lane',lane); gui:SetAttribute('JumpHeight',height)
+    local ability=state.ability or 'None'
+    abilityButton.Visible=ability~='None'
+    abilityButton.Active=ability~='DoubleJump'
+    local cooldown=math.max(0,(state.abilityReadyAt or 0)-elapsed)
+    abilityButton.Text=ability=='DoubleJump' and '2단 점프 · SPACE ×2' or ((Traits.AbilityNames[ability] or '능력')..(cooldown>0 and string.format(' · %.1fs',cooldown) or ' · Q'))
     if os.clock()>feedbackUntil then feedback.Text='' end
     streamAt+=dt
     if streamAt>.2 then streamAt=0; updateTrack(visualDistance) end

@@ -5,6 +5,7 @@ local PlayerFarm={}
 local indices:{[Player]:number}={}
 local Visual=require(ReplicatedStorage.HorseRun.FarmVisual)
 local Rarity=require(ReplicatedStorage.Shared.HorseRarity)
+local Guards=require(script.Parent.GuardService)
 local stealHandler:((Player,Player,string,BasePart)->boolean)?=nil
 function PlayerFarm.setStealHandler(handler:(Player,Player,string,BasePart)->boolean)
 	stealHandler=handler
@@ -60,7 +61,7 @@ function PlayerFarm.render(player:Player,data)
 			text.Text=rarity.DisplayName..(protected and "  🔒" or ""); text.TextColor3=rarity.Color; text.Parent=tag
 			pad:SetAttribute("StealProtected",protected)
 			local prompt=Instance.new("ProximityPrompt"); prompt.Name="PlayerStealPrompt"; prompt.ActionText="훔치기"
-			prompt.ObjectText=player.DisplayName.."의 "..horse.RarityId.." 말"; prompt.HoldDuration=rarity.StealHoldSeconds
+			prompt.ObjectText=player.DisplayName.."의 "..horse.RarityId.." 말"; prompt.HoldDuration=0
 			prompt.MaxActivationDistance=10; prompt.RequiresLineOfSight=false; prompt.Enabled=not protected; prompt.Parent=pad
 			prompt.Triggered:Connect(function(thief)
 				if thief==player or prompt:GetAttribute("Busy")==true or not stealHandler then return end
@@ -80,8 +81,12 @@ function PlayerFarm.render(player:Player,data)
 	end
 	return farm
 end
+function PlayerFarm.hireDog(player,data)
+    local farm=PlayerFarm.render(player,data)
+    Guards.dog(player,farm,baseFor(player))
+end
 function PlayerFarm.remove(player:Player)
 	indices[player]=nil; local farms=Workspace:FindFirstChild("HorseFarms"); local parent=farms and farms:FindFirstChild("PlayerFarms")
-	local farm=parent and parent:FindFirstChild("Farm_"..player.UserId); if farm then farm:Destroy() end
+	local farm=parent and parent:FindFirstChild("Farm_"..player.UserId); if farm then Guards.remove(farm);farm:Destroy() end
 end
 return PlayerFarm

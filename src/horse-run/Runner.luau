@@ -9,7 +9,8 @@ function Runner.new(stats)
     local pvp = stats.mode == 'PvP'
     local chase = stats.mode == 'Chase' or pvp
     return {distance = tonumber(stats.initialDistance) or 0, elapsed = 0, health = maxHealth, maxHealth = maxHealth,
-        speed = speed, carrots = 0,
+        speed = speed, baseSpeed=speed, carrots = 0, ability=stats.ability or 'None',
+        abilityReadyAt=0,boostUntil=-10,jumpFrom=0,jumpCount=0,broken={},pendingEffects={},
         lane = 0, x = 0, laneFrom = 0, laneAt = -10, jumpAt = -10, slideAt = -10,
         lastInput = -10, laneSequence = 0, hitAt = -10, hits = 0, done = false,
         chase = chase, pvp = pvp, goalDistance = tonumber(stats.goalDistance),
@@ -29,7 +30,7 @@ end
 function Runner.heightAt(run, time)
     local progress = (time - run.jumpAt) / Config.JumpDuration
     if progress < 0 or progress > 1 then return 0 end
-    return math.sin(progress * math.pi) * Config.JumpHeight
+    return (run.jumpFrom or 0)*(1-progress)+math.sin(progress * math.pi) * Config.JumpHeight
 end
 
 function Runner.isSliding(run, time)
@@ -46,10 +47,32 @@ function Runner.input(run, action)
         run.lane = math.clamp(run.lane + (action == 'Left' and -1 or 1), -1, 1)
         run.laneAt = run.elapsed
         return true
-    elseif action == 'Jump' and run.elapsed - run.jumpAt >= Config.JumpCooldown then
+    elseif action == 'Jump' then
         if Runner.isSliding(run, run.elapsed) then return false end
+        local height=Runner.heightAt(run,run.elapsed)
+        if run.ability=='DoubleJump' and height>.05 and run.jumpCount==1 and run.elapsed-run.jumpAt>=.16 then
+            run.jumpFrom=height;run.jumpCount=2;run.jumpAt=run.elapsed
+            return true
+        end
+        if run.elapsed-run.jumpAt<Config.JumpCooldown then return false end
+        run.jumpFrom=0;run.jumpCount=1
         run.jumpAt = run.elapsed
         return true
+    elseif action=='Ability' and run.elapsed>=run.abilityReadyAt then
+        if run.ability=='SpeedBoost' then
+            run.boostUntil=run.elapsed+3;run.abilityReadyAt=run.elapsed+10
+            table.insert(run.pendingEffects,{kind='Ability',ability=run.ability})
+            return true
+        elseif run.ability=='BreakObstacle' then
+            for _,row in Course.near(run.distance,0,26,run.course) do
+                local key=row.index..':'..run.lane
+                if row.distance>run.distance and row.distance-run.distance<=26 and table.find(row.lanes,run.lane) and not run.broken[key] then
+                    run.broken[key]=true;run.abilityReadyAt=run.elapsed+8
+                    table.insert(run.pendingEffects,{kind='Broken',id=key,row=row.index,lane=run.lane})
+                    return true
+                end
+            end
+        end
     elseif action == 'Slide' and run.elapsed - run.slideAt >= Config.SlideCooldown then
         if Runner.heightAt(run, run.elapsed) > 0.05 then return false end
         run.slideAt = run.elapsed
@@ -61,6 +84,7 @@ end
 function Runner.step(run, dt)
     if run.done then return {} end
     dt = math.clamp(dt, 0, 0.25)
+    run.speed=run.baseSpeed*(run.elapsed<run.boostUntil and 1.25 or 1)*(run.externalBoost or 1)
     local previous = run.distance
     local previousTime = run.elapsed
     local nextDistance = previous + run.speed * dt
@@ -72,11 +96,11 @@ function Runner.step(run, dt)
             end
         end
         if row.distance > previous and row.distance <= nextDistance then
-            table.insert(events, {distance=row.distance, kind=row.kind, lanes=row.lanes})
+            table.insert(events, {distance=row.distance, kind=row.kind, lanes=row.lanes,row=row.index})
         end
     end
     table.sort(events, function(a,b) return a.distance < b.distance end)
-    local messages = {}
+    local messages = run.pendingEffects;run.pendingEffects={}
     local time = previousTime
     local function advance(target)
         local delta = target - time
@@ -109,7 +133,7 @@ function Runner.step(run, dt)
         else
             local hit = false
             for _, lane in event.lanes do
-                if math.abs(x - lane * Config.LaneWidth) < 3 then hit = true end
+                if not run.broken[event.row..':'..lane] and math.abs(x - lane * Config.LaneWidth) < 3 then hit = true end
             end
             local shouldHit = false
             if event.kind == 'Log' then
@@ -122,7 +146,7 @@ function Runner.step(run, dt)
             if hit and shouldHit then
                 run.hitAt = eventTime; run.hits += 1
                 if run.chase and not run.pvp then
-                    run.pursuerGap = math.max(0, run.pursuerGap - run.hitGapPenalty)
+                    run.pursuerGap = math.max(0, run.pursuerGap - run.hitGapPenalty*Config.MaxHealth/run.maxHealth)
                 else
                     run.health = math.max(0, run.health - Config.Damage)
                 end

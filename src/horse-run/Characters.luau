@@ -30,7 +30,16 @@ function Characters.farmer(parent)
     rigs[m]={rest=rest};return m
 end
 function Characters.poseFarmer(model,cf,time,running)
-    local state=rigs[model];if not state then return end
+    local state=rigs[model]
+    if not state then
+        -- A farmer saved in the Place has no entry in this session's module cache.
+        local root=model.PrimaryPart or model:FindFirstChild('HumanoidRootPart')
+        if not root then return end
+        model.PrimaryPart=root
+        local rest={}
+        for _,p in model:GetChildren() do if p:IsA('BasePart') then rest[p]=root.CFrame:ToObjectSpace(p.CFrame) end end
+        state={rest=rest};rigs[model]=state
+    end
     local phase=time*13;local bounce=running and math.abs(math.sin(phase))*.22 or 0
     for p,rest in state.rest do
         local offset=rest
