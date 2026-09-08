@@ -427,6 +427,12 @@ end)
 Remote.OnServerEvent:Connect(function(player, action, argument)
     local session = sessions[player]
     if not session or type(action) ~= 'string' then return end
+    if session.phase == 'Running' and (action == 'Left' or action == 'Right') then
+        if type(argument) ~= 'number' or argument ~= argument or math.abs(argument) == math.huge
+            or argument % 1 ~= 0 or argument <= session.run.laneSequence then return end
+        -- Advance the acknowledgement even if the input budget or turn cooldown rejects it.
+        session.run.laneSequence = argument
+    end
     local now = os.clock()
     session.budget = math.min(30, session.budget + (now - session.budgetAt) * 15)
     session.budgetAt = now
@@ -529,7 +535,7 @@ RunService.Heartbeat:Connect(function(dt)
                     for role, pair in {Thief = {event.thief, thiefSession}, Owner = {event.owner, ownerSession}} do
                         local p, s = pair[1], pair[2]
                         send(p, 'State', {distance=s.run.distance,elapsed=s.run.elapsed,health=s.run.health,maxHealth=s.run.maxHealth,
-                            speed=s.run.speed,carrots=s.run.carrots,x=s.run.x,lane=s.run.lane,jumpAt=s.run.jumpAt,slideAt=s.run.slideAt,
+                            speed=s.run.speed,carrots=s.run.carrots,x=s.run.x,lane=s.run.lane,laneSequence=s.run.laneSequence,jumpAt=s.run.jumpAt,slideAt=s.run.slideAt,
                             hitAt=s.run.hitAt,chase=true,pvpRole=role,goalDistance=event.goalDistance,pursuerGap=gap,serverTime=workspace:GetServerTimeNow()})
                     end
                     local cooldown = math.max(0, event.boostReadyAt - workspace:GetServerTimeNow())
@@ -542,7 +548,7 @@ RunService.Heartbeat:Connect(function(dt)
                 if thiefSession.run.done then finishPvp(event, thiefSession.run.outcome or 'Captured')
                 elseif broadcast then send(event.thief, 'State', {distance=thiefSession.run.distance,elapsed=thiefSession.run.elapsed,
                     health=thiefSession.run.health,maxHealth=thiefSession.run.maxHealth,speed=thiefSession.run.speed,
-                    carrots=thiefSession.run.carrots,x=thiefSession.run.x,lane=thiefSession.run.lane,jumpAt=thiefSession.run.jumpAt,
+                    carrots=thiefSession.run.carrots,x=thiefSession.run.x,lane=thiefSession.run.lane,laneSequence=thiefSession.run.laneSequence,jumpAt=thiefSession.run.jumpAt,
                     slideAt=thiefSession.run.slideAt,hitAt=thiefSession.run.hitAt,chase=true,pvpRole='Thief',
                     goalDistance=event.goalDistance,pursuerGap=thiefSession.run.pursuerGap,serverTime=workspace:GetServerTimeNow()}) end
             end
@@ -564,6 +570,7 @@ RunService.Heartbeat:Connect(function(dt)
                     health = session.run.health, maxHealth = session.run.maxHealth,
                     speed = session.run.speed, carrots = session.run.carrots, x = session.run.x,
                     lane = session.run.lane, jumpAt = session.run.jumpAt,
+                    laneSequence = session.run.laneSequence,
                     slideAt = session.run.slideAt, hitAt = session.run.hitAt,
                     chase = session.run.chase, goalDistance = session.run.goalDistance,
                     pursuerGap = session.run.pursuerGap,
@@ -622,7 +629,8 @@ game:BindToClose(function()
 end)
 
 local world = workspace:FindFirstChild('HorseRunWorld')
-if not world or world:GetAttribute('LayoutVersion')~=3 then world=require(Shared.World).build() end
+if not world then world=require(Shared.World).build() end
+require(Shared.FarmVisual).alignRoad(world)
 world:WaitForChild('StartGate').ProximityPrompt.Triggered:Connect(startRun)
 world:WaitForChild('TrainingPad').ProximityPrompt.Triggered:Connect(function(player)
     local session = sessions[player]

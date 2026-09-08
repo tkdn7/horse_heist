@@ -10,7 +10,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 local DEFINITIONS = {
 	Click = {id = "rbxassetid://88442833509532", volume = 0.28},
 	Footsteps = {id = "rbxassetid://18438190442", volume = 0.3, looped = true},
-	Gallop = {id = "rbxassetid://118636555040923", volume = 0.5, looped = true},
+	Gallop = {id = "rbxassetid://118636555040923", volume = 0.2, looped = true},
 	Jump = {id = "rbxassetid://132163823091536", volume = 0.38},
 	Land = {id = "rbxassetid://9119321317", volume = 0.28},
 	Slide = {id = "rbxassetid://9114658416", volume = 0.42},

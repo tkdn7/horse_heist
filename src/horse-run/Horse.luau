@@ -4,6 +4,13 @@ local Horse={}
 local states=setmetatable({},{__mode='k'})
 local templates=script.Parent:WaitForChild('Horses')
 local function smooth(x) x=math.clamp(x,0,1);return x*x*(3-2*x) end
+-- Independent contacts: hind left, hind right, front left, front right.
+local gait={
+    {name='Left Hip',phase=0,side=-1,reach=.52},
+    {name='Right Hip',phase=.18,side=1,reach=.56},
+    {name='Left Shoulder',phase=.50,side=-1,reach=.64},
+    {name='Right Shoulder',phase=.68,side=1,reach=.68},
+}
 function Horse.getNames()
     local names={};for _,m in templates:GetChildren() do if m:IsA('Model') then table.insert(names,m.Name) end end
     table.sort(names);return names
@@ -54,19 +61,28 @@ function Horse.pose(model,cf,time,running,motion)
     local airborne=jump~=nil and jump>=0 and jump<=1
     local dt=state.time and math.clamp(time-state.time,0,.1) or 0;state.time=time
     -- Integrate cadence so acceleration never changes the phase discontinuously.
-    state.stride+=dt*(8.5+math.clamp((motion.speed or 16)/32,0,2)*3.5)
+    if running then state.stride+=dt*(8.5+math.clamp((motion.speed or 16)/32,0,2)*3.5) end
     local t=state.stride;local offsets={}
     local active=running and not airborne and 1-slide or 0
-    -- Four-beat transverse gallop: rear pair lead, front pair follow, with suspension.
-    for index,name in {'Left Hip','Right Hip','Left Shoulder','Right Shoulder'} do
-        local phase=t+({0,.55,2.5,3.05})[index]
-        local swing=math.sin(phase)*.58*active
-        local side=(index==1 or index==3) and -1 or 1
+    -- Sweep backward while planted, then lift and recover faster through the air.
+    -- The source legs are rigid pieces, so clearance comes from the existing hip/shoulder.
+    for _,leg in gait do
+        local cycle=(t/(2*math.pi)-leg.phase)%1
+        local stance=.56
+        local angle,lift
+        if cycle<stance then
+            angle=-leg.reach+2*leg.reach*(cycle/stance)
+            lift=0
+        else
+            local recovery=(cycle-stance)/(1-stance)
+            angle=leg.reach-2*leg.reach*smooth(recovery)
+            lift=math.sin(recovery*math.pi)*.28
+        end
         local tuck=airborne and math.sin(math.pi*jump)*.65 or 0
-        offsets[name]=CFrame.Angles(swing-tuck,0,side*slide*1.3)
+        offsets[leg.name]=CFrame.new(0,lift*active,0)*CFrame.Angles(angle*active-tuck,0,leg.side*slide*1.3)
     end
-    local bob=(1-math.cos(t*2))*.09*active
-    local pitch=math.sin(t)*.045*active+(airborne and math.cos(jump*math.pi)*.12 or 0)
+    local bob=(1-math.cos(t-1.1))*.07*active
+    local pitch=math.sin(t-.6)*.035*active+(airborne and math.cos(jump*math.pi)*.12 or 0)
     offsets['Upper Spine']=CFrame.Angles(0,0,math.sin(t-.4)*.035*active)
     offsets.Neck=CFrame.Angles(0,0,-math.sin(t-.4)*.04*active)
     offsets['Lower Spine']=CFrame.Angles(.05,math.sin(t*.65)*.12,0)

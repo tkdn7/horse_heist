@@ -11,7 +11,7 @@ function Runner.new(stats)
     return {distance = tonumber(stats.initialDistance) or 0, elapsed = 0, health = maxHealth, maxHealth = maxHealth,
         speed = speed, carrots = 0,
         lane = 0, x = 0, laneFrom = 0, laneAt = -10, jumpAt = -10, slideAt = -10,
-        lastInput = -10, hitAt = -10, hits = 0, done = false,
+        lastInput = -10, laneSequence = 0, hitAt = -10, hits = 0, done = false,
         chase = chase, pvp = pvp, goalDistance = tonumber(stats.goalDistance),
         pursuerGap = tonumber(stats.pursuerGap) or 24,
         maximumPursuerGap = tonumber(stats.maximumPursuerGap) or 24,

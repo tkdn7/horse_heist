@@ -35,6 +35,7 @@ function PlayerFarm.render(player:Player,data)
         farm=Instance.new("Model");farm.Name=name;farm:SetAttribute("OwnerUserId",player.UserId);farm.Parent=parent
         Visual.player(farm,base,player.DisplayName)
     end
+    Visual.alignPlayer(farm,base)
     local old=farm:FindFirstChild("Displays");if old then old:Destroy() end
     local displays=Instance.new("Folder",farm);displays.Name="Displays"
     local placed={}

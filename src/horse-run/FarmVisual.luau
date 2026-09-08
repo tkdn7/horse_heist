@@ -15,10 +15,13 @@ function FarmVisual.label(parent,text,cf,width,height)
         local t=Instance.new('TextLabel',ui);t.Size=UDim2.fromScale(.94,.9);t.Position=UDim2.fromScale(.03,.05);t.BackgroundTransparency=1
         t.Text=text;t.TextScaled=true;t.Font=Enum.Font.GothamBold;t.TextColor3=cream
     end
+    return board
 end
 function FarmVisual.playerBase(index)
     local column=(index-1)%2;local row=math.floor((index-1)/2)
+    -- The gate is on local +Z. Turn both banks inward toward the central road.
     return CFrame.new(column==0 and -118 or 118,0,125+row*170)
+        *CFrame.Angles(0,column==0 and math.pi/2 or -math.pi/2,0)
 end
 function FarmVisual.slot(base,index)
     local column=(index-1)%6;local row=math.floor((index-1)/6)
@@ -58,13 +61,52 @@ function FarmVisual.player(farm,base,name)
     barn(arch,base*CFrame.new(0,0,-14),100,63,Color3.fromRGB(85,127,124))
     FarmVisual.label(arch,name..'의 마구간',base*CFrame.new(0,12,18),27,3)
     part(arch,'Courtyard',Vector3.new(106,.25,39),base*CFrame.new(0,.24,42),Color3.fromRGB(203,181,140),Enum.Material.Ground)
+    -- Join the courtyard through the centered 26-stud gate to the road edge (X = +/-19).
+    part(arch,'EntrancePath',Vector3.new(24,.22,39),base*CFrame.new(0,.25,80.5),Color3.fromRGB(193,170,129),Enum.Material.Ground)
     for i=1,12 do
         local cf=FarmVisual.slot(base,i)
         for _,x in {-7.7,7.7} do part(arch,'StallDivider',Vector3.new(.35,3.2,18),cf*CFrame.new(x,1.6,0),wood) end
         part(arch,'HayBale',Vector3.new(3,2,2),cf*CFrame.new(-5,1,-6),Color3.fromRGB(210,173,79),Enum.Material.Grass)
     end
-    FarmVisual.label(arch,'개인 농장 · 말 12마리 전시',base*CFrame.new(0,5,65),26,3)
+    FarmVisual.label(arch,'개인 농장 · 말 12마리 전시',base*CFrame.new(0,9,65),26,3).Name='EntranceSign'
     local spawn=part(arch,'HomePoint',Vector3.one,base*CFrame.new(0,4,43),cream);spawn.Transparency=1;spawn.CanCollide=false
+end
+function FarmVisual.alignPlayer(farm,base)
+    local arch=farm:FindFirstChild('Architecture')
+    local home=arch and arch:FindFirstChild('HomePoint')
+    if not home then return end
+    -- Existing generated farms may be saved in the Place. Move their geometry together.
+    local previousBase=home.CFrame*CFrame.new(0,-4,-43)
+    local delta=base*previousBase:Inverse()
+    if (previousBase.Position-base.Position).Magnitude>.01 or previousBase.ZVector:Dot(base.ZVector)<.9999 then
+        for _,p in arch:GetDescendants() do
+            if p:IsA('BasePart') then p.CFrame=delta*p.CFrame end
+        end
+    end
+    if not arch:FindFirstChild('EntrancePath') then
+        part(arch,'EntrancePath',Vector3.new(24,.22,39),base*CFrame.new(0,.25,80.5),Color3.fromRGB(193,170,129),Enum.Material.Ground)
+    end
+    for _,p in arch:GetChildren() do
+        if p:IsA('BasePart') and p.Name=='Sign' then
+            local localPosition=base:PointToObjectSpace(p.Position)
+            if math.abs(localPosition.Z-65)<.1 and math.abs(localPosition.Y-5)<.1 then
+                p.CFrame+=Vector3.new(0,4,0);p.Name='EntranceSign'
+            end
+        end
+    end
+    farm:SetAttribute('LayoutVersion',4)
+end
+function FarmVisual.alignRoad(world)
+    if world:GetAttribute('LayoutVersion')==4 then return end
+    -- Only the named generated cross streets change; keep all other saved map content.
+    for _,p in world:GetChildren() do
+        if p:IsA('BasePart') and p.Name=='FarmLane' then
+            local row=math.max(0,math.floor((p.Position.Z-168)/170+.5))
+            p.Size=Vector3.new(200,.22,20)
+            p.CFrame=CFrame.new(0,.16,125+row*170)
+        end
+    end
+    world:SetAttribute('LayoutVersion',4)
 end
 function FarmVisual.npc(farm)
     if farm:FindFirstChild('Architecture') then return end
@@ -110,11 +152,11 @@ function FarmVisual.rarity(parent,model,pad,rarity)
     end
 end
 function FarmVisual.world()
-    local world=Instance.new('Model');world.Name='HorseRunWorld';world:SetAttribute('LayoutVersion',3)
+    local world=Instance.new('Model');world.Name='HorseRunWorld';world:SetAttribute('LayoutVersion',4)
     part(world,'Meadow',Vector3.new(900,1,1600),CFrame.new(0,-.6,340),Color3.fromRGB(110,151,84),Enum.Material.Grass)
     part(world,'VillageRoad',Vector3.new(38,.2,1360),CFrame.new(0,.1,390),Color3.fromRGB(193,170,129),Enum.Material.Ground)
     part(world,'VillageSquare',Vector3.new(168,.22,96),CFrame.new(0,.14,-37),Color3.fromRGB(186,170,141),Enum.Material.Cobblestone)
-    for row=0,5 do part(world,'FarmLane',Vector3.new(332,.22,20),CFrame.new(0,.16,168+row*170),Color3.fromRGB(191,170,132),Enum.Material.Ground) end
+    for row=0,5 do part(world,'FarmLane',Vector3.new(200,.22,20),CFrame.new(0,.16,125+row*170),Color3.fromRGB(191,170,132),Enum.Material.Ground) end
     FarmVisual.label(world,'HORSE HEIST\n↑ 농장주의 목장   |   개인 농장 ↓',CFrame.new(0,9,-102),40,6)
     for _,x in {-23,23} do part(world,'Waypost',Vector3.new(1,12,1),CFrame.new(x,6,-102),wood) end
     local gate=part(world,'StartGate',Vector3.new(16,.3,12),CFrame.new(-52,.4,-40),Color3.fromRGB(198,167,91),Enum.Material.Sand)

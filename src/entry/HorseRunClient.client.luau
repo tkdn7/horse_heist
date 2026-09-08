@@ -30,6 +30,8 @@ local wasAirborne=false; local landUntil=0
 local track,horse,farmer
 local farmerX=0;local farmerGap=24
 local chunks,rows,carrotModels={},{},{}
+local collectedCarrots={}
+local laneSequence=0; local pendingLanes={}; local lastLaneInput=-math.huge
 local courseSettings=nil
 local chaseRarityName=nil
 local selectedHorse='Horse1'
@@ -77,63 +79,6 @@ local expText=text('Exp',levelCard,'0 / 100 EXP',UDim2.fromOffset(91,11),UDim2.n
 local expTrack=frame('ExpTrack',levelCard,UDim2.fromOffset(14,45),UDim2.new(1,-28,0,13),Color3.fromRGB(222,229,207))
 local expFill=frame('ExpFill',expTrack,UDim2.new(),UDim2.fromScale(0,1),GOLD)
 
-local lobby=frame('LobbyCard',gui,UDim2.new(0,20,1,-261),UDim2.fromOffset(350,235))
-text('Eyebrow',lobby,'HORSE HEIST  /  FARM LIFE',UDim2.fromOffset(22,18),UDim2.new(1,-44,0,18),Enum.Font.GothamBold,MUTED)
-text('Heading',lobby,'농장주 목장에서 훔친 말로\n내 마구간을 채워 보세요',UDim2.fromOffset(22,46),UDim2.new(1,-44,0,68),Enum.Font.GothamBold)
-text('Description',lobby,'울타리는 점프 · 통나무는 옆으로\n당근을 모으며 더 멀리 달려보세요.',UDim2.fromOffset(22,126),UDim2.new(1,-44,0,38),nil,MUTED)
-button('PlayButton',lobby,'연습 달리기  →',UDim2.fromOffset(20,180),UDim2.new(1,-40,0,40),function() Remote:FireServer('Start') end)
--- Horse selection panel
-local horsePanel=frame('HorsePanel',gui,UDim2.new(0,20,1,-200),UDim2.fromOffset(350,170))
-text('HorsePanelTitle',horsePanel,'말 선택',UDim2.fromOffset(20,12),UDim2.new(1,-40,0,24),Enum.Font.GothamBold)
-local horseButtons={}
-local function refreshHorseButtons()
-    for _,btn in horseButtons do btn:Destroy() end
-    horseButtons={}
-    local names=horseNames
-    if #names==0 then names={'Horse1'} end
-    local btnWidth=math.floor((340-40-(#names-1)*8)/#names)
-    for i,name in ipairs(names) do
-        local btn=Instance.new('TextButton')
-        btn.Name='Horse_'..name
-        btn.Text=name
-        btn.Font=Enum.Font.GothamBold
-        btn.TextSize=16
-        btn.BorderSizePixel=0
-        btn.Size=UDim2.fromOffset(btnWidth,80)
-        btn.Position=UDim2.fromOffset(20+(i-1)*(btnWidth+8),48)
-        btn.Parent=horsePanel
-        rounded(btn,12)
-        local function updateStyle()
-            if selectedHorse==name then
-                btn.BackgroundColor3=GOLD
-                btn.TextColor3=GREEN
-                btn.Text='✓ '..name
-            else
-                btn.BackgroundColor3=Color3.fromRGB(234,239,218)
-                btn.TextColor3=GREEN
-                btn.Text=name
-            end
-        end
-        updateStyle()
-        btn.Activated:Connect(function()
-            selectedHorse=name
-            for _,b in horseButtons do
-                local bName=b.Name:gsub('Horse_','')
-                if b.Name=='Horse_'..selectedHorse then
-                    b.BackgroundColor3=GOLD
-                    b.TextColor3=GREEN
-                    b.Text='✓ '..bName
-                else
-                    b.BackgroundColor3=Color3.fromRGB(234,239,218)
-                    b.TextColor3=GREEN
-                    b.Text=bName
-                end
-            end
-        end)
-        table.insert(horseButtons,btn)
-    end
-end
-refreshHorseButtons()
 local hint=text('LobbyHint',gui,'W A S D 이동  ·  마우스로 시점 회전\nNPC 말 앞에서 E키를 꾹 눌러 훔치기',UDim2.new(.5,-200,1,-74),UDim2.fromOffset(400,46),nil,PAPER)
 local sessionNote=text('SessionNote',gui,'STUDIO TEST · 실제 운영 저장 데이터와 분리됨',UDim2.new(.5,-260,1,-22),UDim2.fromOffset(520,17),nil,GREEN)
 local trainingShortcut=button('TrainingShortcut',gui,'훈련  ↑',UDim2.new(1,-144,1,-74),UDim2.fromOffset(124,48),function() Remote:FireServer('OpenTraining') end,GOLD)
@@ -155,8 +100,18 @@ local function action(which)
     local elapsed=state.elapsed+math.clamp(workspace:GetServerTimeNow()-state.serverTime,0,.2)
     local sliding=elapsed-slideAt>=0 and elapsed-slideAt<Config.SlideDuration
     local airborne=elapsed-jumpAt>=0 and elapsed-jumpAt<Config.JumpDuration
-    if which=='Left' then lane=math.max(-1,lane-1)
-    elseif which=='Right' then lane=math.min(1,lane+1)
+    if which=='Left' or which=='Right' then
+        local now=os.clock()
+        if now-lastLaneInput<.08 then return end
+        local delta=which=='Left' and -1 or 1
+        local target=math.clamp(lane+delta,-1,1)
+        if target==lane then return end
+        lastLaneInput=now
+        laneSequence+=1
+        table.insert(pendingLanes,{sequence=laneSequence,delta=delta})
+        lane=target
+        Remote:FireServer(which,laneSequence)
+        return
     elseif which=='Jump' then
         if not sliding and elapsed-jumpAt>=Config.JumpCooldown then jumpAt=elapsed else return end
     elseif which=='Slide' then
@@ -236,22 +191,6 @@ local function layout()
     wallet.Position=UDim2.new(1,narrow and -157 or -230,0,16)
     brand.Position=UDim2.fromOffset(narrow and 12 or 20,16)
     trainingShortcut.Position=narrow and UDim2.new(1,-136,0,98) or UDim2.new(1,-144,1,-74)
-    lobby.Size=UDim2.fromOffset(math.min(350,width-24),235)
-    lobby.Position=narrow and UDim2.new(.5,-math.min(350,width-24)/2,1,-275) or UDim2.new(0,20,1,-261)
-    local compactLobby=Input.TouchEnabled or narrow
-    lobby.Eyebrow.Visible=not compactLobby
-    lobby.Heading.Visible=not compactLobby
-    lobby.Description.Visible=not compactLobby
-    if compactLobby then
-        -- Leave the default thumbstick and jump button free on both sides.
-        lobby.Size=UDim2.fromOffset(184,48)
-        lobby.Position=UDim2.new(.5,-92,1,-64)
-        lobby.PlayButton.Position=UDim2.fromOffset(0,0)
-        lobby.PlayButton.Size=UDim2.fromScale(1,1)
-    else
-        lobby.PlayButton.Position=UDim2.fromOffset(20,180)
-        lobby.PlayButton.Size=UDim2.new(1,-40,0,40)
-    end
     hint.Visible=phase=='Lobby' and not narrow and width>1050
     sessionNote.Size=UDim2.fromOffset(math.min(520,width-24),17)
     sessionNote.Position=UDim2.new(.5,-math.min(520,width-24)/2,1,-22)
@@ -282,37 +221,20 @@ end
 
 local function visibility()
     gui:SetAttribute('Phase',phase)
-    lobby.Visible=phase=='Lobby'; sessionNote.Visible=phase=='Lobby'; trainingShortcut.Visible=phase=='Lobby'
-    horsePanel.Visible=phase=='Lobby'
+    sessionNote.Visible=phase=='Lobby'; trainingShortcut.Visible=phase=='Lobby'
     hud.Visible=phase=='Running' or phase=='Countdown'
     runControls.Visible=phase=='Running'
     countdown.Visible=phase=='Countdown'
     shade.Visible=phase=='Results'; feedback.Visible=phase=='Running'
     if phase~='Lobby' then trainingShade.Visible=false end
-    -- Position horse selection panel above lobby card
-    local width=gui.AbsoluteSize.X
-    local narrow=width<720
-    local panelWidth=math.min(350,width-24)
-    local panelHeight=narrow and 120 or 170
-    horsePanel.Size=UDim2.fromOffset(panelWidth,panelHeight)
-    if narrow then
-        horsePanel.Position=UDim2.new(.5,-panelWidth/2,1,-64-8-panelHeight)
-    else
-        horsePanel.Position=UDim2.new(0,20,1,-261-panelHeight-8)
-    end
-    -- Adjust button layout for panel height
-    for i,btn in horseButtons do
-        btn.Size=UDim2.fromOffset(btn.Size.X.Offset, narrow and 56 or 80)
-        btn.Position=UDim2.fromOffset(20+(i-1)*(btn.Size.X.Offset+8), narrow and 40 or 48)
-    end
-    horsePanel.HorsePanelTitle.Visible=not narrow
     layout()
 end
 
 local function clearTrack()
     if horse then Horse.clear(horse) end
     if track then track:Destroy() end
-    track=nil; horse=nil; farmer=nil; chunks={}; rows={}; carrotModels={}
+    track=nil; horse=nil; farmer=nil; chunks={}; rows={}; carrotModels={}; collectedCarrots={}
+    laneSequence=0; pendingLanes={}; lastLaneInput=-math.huge
 end
 local function localPart(parent,name,size,position,color,material,shape)
     local p=World.part(parent,name,size,CFrame.new(ORIGIN+position),color,material,shape)
@@ -367,6 +289,8 @@ local function createRow(row)
         end
     end
     for _,carrot in row.carrots do
+        -- A delayed pickup can arrive before this row is streamed, or the row can be rebuilt.
+        if collectedCarrots[carrot.id] then continue end
         local modelCarrot=Instance.new('Model'); modelCarrot.Name='Carrot_'..carrot.id; modelCarrot.Parent=model
         local center=Vector3.new(carrot.lane*Config.LaneWidth,1.6,-carrot.distance)
         localPart(modelCarrot,'Carrot',Vector3.new(.9,1.7,.9),center,Color3.fromRGB(249,139,47),Enum.Material.Neon,Enum.PartType.Ball)
@@ -381,10 +305,14 @@ local function updateTrack(distance)
     local chunkIndex=math.floor(distance/100)
     for index,chunk in chunks do if index<chunkIndex-1 or index>chunkIndex+4 then chunk:Destroy(); chunks[index]=nil end end
     for index=chunkIndex-1,chunkIndex+4 do if not chunks[index] then createChunk(index) end end
-    local first=math.max(0,math.floor((distance-60-Config.CourseStart)/Config.RowLength))
+    local rowLength=math.max(Config.RowLength,tonumber(courseSettings and courseSettings.rowLength) or Config.RowLength)
+    local first=math.max(0,math.floor((distance-60-Config.CourseStart)/rowLength))
     for index,model in rows do
         if index<first then
-            for _,carrot in Course.row(index,courseSettings).carrots do carrotModels[carrot.id]=nil end
+            for _,carrot in Course.row(index,courseSettings).carrots do
+                carrotModels[carrot.id]=nil
+                collectedCarrots[carrot.id]=nil
+            end
             model:Destroy(); rows[index]=nil
         end
     end
@@ -475,17 +403,29 @@ Remote.OnClientEvent:Connect(function(kind,data)
         wasAirborne=false; landUntil=0
         controls:Disable(); hideCharacter(true); camera.CameraType=Enum.CameraType.Scriptable
         GuiService.TouchControlsEnabled=false
-        updateTrack(0); visibility()
+        updateTrack(initialDistance); visibility()
     elseif kind=='Running' then
         phase='Running'; state.serverTime=workspace:GetServerTimeNow(); visibility()
     elseif kind=='State' then
-        state=data; lane=data.lane
+        state=data
+        -- Reapply inputs the server has not processed yet; stale snapshots must not undo a turn.
+        local acknowledged=data.laneSequence or 0
+        local predicted=data.lane
+        local remaining={}
+        for _,input in pendingLanes do
+            if input.sequence>acknowledged then
+                table.insert(remaining,input)
+                predicted=math.clamp(predicted+input.delta,-1,1)
+            end
+        end
+        pendingLanes=remaining; lane=predicted
         if data.jumpAt>jumpAt or data.elapsed-jumpAt>Config.JumpDuration then jumpAt=data.jumpAt end
         local serverSlideAt=data.slideAt or -10
         if serverSlideAt>slideAt or data.elapsed-slideAt>Config.SlideDuration then slideAt=serverSlideAt end
         gui:SetAttribute('SlideAt',slideAt)
     elseif kind=='Effect' then
         if data.kind=='Carrot' then
+            collectedCarrots[data.id]=true
             local model=carrotModels[data.id]; if model then model:Destroy(); carrotModels[data.id]=nil end
             feedback.Text=state.chase and '당근 +1' or '당근 +1  ·  체력 +1'; feedback.TextColor3=GOLD; feedbackUntil=os.clock()+.7
         elseif data.kind=='Hit' then
@@ -548,7 +488,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
     local targetX=lane*Config.LaneWidth
     local lean=math.clamp((targetX-visualX)/Config.LaneWidth,-1,1)
-    visualX+=(targetX-visualX)*math.min(1,dt*18)
+    visualX+=(targetX-visualX)*(1-math.exp(-18*dt))
     local progress=(elapsed-jumpAt)/Config.JumpDuration
     local height=progress>=0 and progress<=1 and math.sin(progress*math.pi)*Config.JumpHeight or 0
     local airborne=height>0.05
