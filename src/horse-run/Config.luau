@@ -14,6 +14,7 @@ return table.freeze({
     UpgradeCosts = table.freeze({Speed = 100, Stamina = 100}),
     UpgradeGains = table.freeze({Speed = 0.4, Stamina = 3}),
     AutosaveSeconds = 60,
+    RespawnSeconds = 2,
 })
 
 

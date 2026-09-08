@@ -1,6 +1,20 @@
 local Config = require(script.Parent.Config)
 local Course = require(script.Parent.Course)
+local ChaseConfig=require(script.Parent.Parent.Shared.ChaseConfig)
 local Runner = {}
+
+function Runner.pursuerSpeed(run,time)
+    return math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+math.min(ChaseConfig.NpcMaxSpeedAdvantage,
+        ChaseConfig.NpcStartSpeedOffset+math.max(0,time-ChaseConfig.NpcAccelerationDelay)*ChaseConfig.NpcAcceleration))
+end
+
+local function pursuerDistance(run,time)
+    local start=math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+ChaseConfig.NpcStartSpeedOffset)
+    local maximum=math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+ChaseConfig.NpcMaxSpeedAdvantage)
+    local ramp=math.max(0,time-ChaseConfig.NpcAccelerationDelay)
+    local accelerating=math.min(ramp,math.max(0,maximum-start)/ChaseConfig.NpcAcceleration)
+    return start*time+.5*ChaseConfig.NpcAcceleration*accelerating^2+(maximum-start)*math.max(0,ramp-accelerating)
+end
 
 function Runner.new(stats)
     stats = stats or {}
@@ -164,10 +178,10 @@ function Runner.step(run, dt)
     end
     run.x = Runner.xAt(run, run.elapsed)
     if run.chase and not run.pvp and not run.done then
-        if run.elapsed - run.hitAt >= run.gapRecoveryDelay then
-            run.pursuerGap = math.min(run.maximumPursuerGap,
-                run.pursuerGap + run.gapRecoveryPerSecond * dt)
-        end
+        local travelled=run.distance-previous
+        local followed=pursuerDistance(run,run.elapsed)-pursuerDistance(run,previousTime)
+        run.pursuerSpeed=Runner.pursuerSpeed(run,run.elapsed)
+        run.pursuerGap=math.clamp(run.pursuerGap+travelled-followed,0,run.maximumPursuerGap)
         -- Capture wins if capture and finish happen during the same simulation step.
         if run.pursuerGap <= 0 then
             run.outcome = 'Captured'

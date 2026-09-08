@@ -6,6 +6,7 @@ local HttpService = game:GetService('HttpService')
 local Shared = ReplicatedStorage:WaitForChild('HorseRun')
 local GlobalShared = ReplicatedStorage:WaitForChild('Shared')
 local Config = require(Shared.Config)
+Players.RespawnTime=Config.RespawnSeconds
 local Runner = require(Shared.Runner)
 local Progression = require(Shared.Progression)
 local PlayerStore = require(Shared.DataStore)
@@ -102,18 +103,33 @@ local function saveHorseSession(player, session, reason)
     return ok
 end
 
-local function restore(player)
+local function restore(player,expectedCharacter)
     player:SetAttribute('TheftProtected',false)
     local character = player.Character
+    if expectedCharacter and character~=expectedCharacter then return end
     local root = character and character:FindFirstChild('HumanoidRootPart')
     if root then
         root.Anchored = false
         character:PivotTo(PlayerFarm.home(player))
+        root.AssemblyLinearVelocity=Vector3.zero;root.AssemblyAngularVelocity=Vector3.zero
     end
 end
 
 local function setup(player)
     if sessions[player] then return end
+    -- Assign the streaming/spawn destination before any data-store requests can yield.
+    PlayerFarm.prepareSpawn(player)
+    local function placeCharacter(character)
+        local started=os.clock()
+        task.spawn(function()
+            if character:WaitForChild('HumanoidRootPart',10) and player.Parent and player.Character==character then
+                restore(player,character)
+                player:SetAttribute('LastSpawnPlacementMs',math.floor((os.clock()-started)*1000))
+            end
+        end)
+    end
+    player.CharacterAdded:Connect(placeCharacter)
+    if player.Character then placeCharacter(player.Character) end
     local leaderstats = Instance.new('Folder')
     leaderstats.Name = 'leaderstats'
     leaderstats.Parent = player
@@ -152,7 +168,6 @@ local function setup(player)
     if loadError then send(player, 'SaveStatus', {ok = false, mode = PlayerStore.mode, reason = 'Load'}) end
 
     player.CharacterAdded:Connect(function(character)
-        task.defer(function() if character:WaitForChild("HumanoidRootPart",10) then restore(player) end end)
         if session.pvpEvent and cancelPvp then
             task.defer(cancelPvp, session.pvpEvent, 'CharacterReset')
             return

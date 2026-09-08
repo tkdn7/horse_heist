@@ -7,6 +7,12 @@ return table.freeze({
 	HitGapPenalty = 8,
 	GapRecoveryDelay = 2,
 	GapRecoveryPerSecond = 1,
+	-- NPC runner starts a little slower, then closes in without an unlimited speed ramp.
+	NpcStartSpeedOffset = -0.6,
+	NpcMaxSpeedAdvantage = 0.4,
+	NpcAcceleration = 0.06,
+	NpcAccelerationDelay = 3,
+	NpcMaximumSpeed = 64,
 	CatchGap = 0,
 	SlotRefillSeconds = 60,
 	JoinWindowSeconds = 10,

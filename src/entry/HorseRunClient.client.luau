@@ -244,11 +244,22 @@ local function visibility()
 end
 
 local function clearTrack()
-    if horse then Horse.clear(horse) end
-    if track then track:Destroy() end
+    -- Hide immediately; spread disposal over frames instead of stalling the respawn frame.
+    local oldTrack,oldHorse=track,horse
+    if oldTrack then oldTrack.Parent=nil end
     track=nil; horse=nil; farmer=nil; chunks={}; rows={}; carrotModels={}; collectedCarrots={}
     brokenObstacles={};jumpFrom=0;jumpCount=0
     laneSequence=0; pendingLanes={}; lastLaneInput=-math.huge
+    task.defer(function()
+        if oldHorse then Horse.clear(oldHorse) end
+        if oldTrack then
+            for index,child in oldTrack:GetChildren() do
+                child:Destroy()
+                if index%6==0 then RunService.Heartbeat:Wait() end
+            end
+            oldTrack:Destroy()
+        end
+    end)
 end
 local function localPart(parent,name,size,position,color,material,shape)
     local p=World.part(parent,name,size,CFrame.new(ORIGIN+position),color,material,shape)
@@ -363,13 +374,21 @@ local function enterLobby()
     if player.Character then followCharacter(player.Character) end
     visibility()
 end
+local deathConnection
+local function hookRespawn(character)
+    if deathConnection then deathConnection:Disconnect();deathConnection=nil end
+    task.spawn(function()
+        local humanoid=character:WaitForChild('Humanoid',10)
+        if humanoid and player.Character==character then
+            deathConnection=humanoid.Died:Connect(enterLobby)
+        end
+    end)
+end
+player.CharacterRemoving:Connect(enterLobby)
 player.CharacterAdded:Connect(function(character)
-    if phase=='Lobby' then
-        controls:Enable()
-        camera.CameraType=Enum.CameraType.Custom
-        followCharacter(character)
-    end
+    enterLobby();hookRespawn(character)
 end)
+if player.Character then hookRespawn(player.Character) end
 
 Remote.OnClientEvent:Connect(function(kind,data)
     if kind=='Profile' then
@@ -532,15 +551,16 @@ RunService.RenderStepped:Connect(function(dt)
     local horsePosition=ORIGIN+Vector3.new(visualX,.2+height,-visualDistance)
     Horse.pose(horse,CFrame.new(horsePosition),elapsed,phase=='Running',{
         speed=state.speed or Config.Speed,
-        jumpProgress=progress>=0 and progress<=1 and progress or nil,
+        jumpProgress=phase~='Results' and progress>=0 and progress<=1 and progress or nil,
+        jumpCount=jumpCount,
         slideProgress=slideProgress,
         landing=landing,
         lean=lean,
         hit=hitFlash,
     })
     if farmer then
-        farmerX+=(visualX-farmerX)*math.min(1,dt*5)
-        farmerGap+=((state.pursuerGap or 24)-farmerGap)*math.min(1,dt*12)
+        farmerX+=(visualX-farmerX)*(1-math.exp(-dt*5))
+        farmerGap+=((state.pursuerGap or 24)-farmerGap)*(1-math.exp(-dt*12))
         Characters.poseFarmer(farmer,CFrame.new(ORIGIN+Vector3.new(farmerX,.2,-visualDistance+farmerGap)),elapsed,phase=='Running')
         farmer:SetAttribute('Gap',farmerGap)
     end

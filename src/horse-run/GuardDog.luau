@@ -29,4 +29,11 @@ function Dog.pose(dog,cf,time,running)
         p.CFrame=cf*rest*CFrame.Angles(swing,0,0)
     end
 end
+function Dog.capture(model)
+    local poses={}
+    for _,p in model:GetChildren() do
+        if p:IsA('BasePart') then poses[p]=p:GetAttribute('GuardRestCF') or model.PrimaryPart.CFrame:ToObjectSpace(p.CFrame) end
+    end
+    return {model=model,poses=poses}
+end
 return Dog

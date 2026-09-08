@@ -21,6 +21,20 @@ end
 function PlayerFarm.home(player:Player):CFrame
     return baseFor(player)*CFrame.new(0,4,43)
 end
+function PlayerFarm.prepareSpawn(player:Player)
+    local folder=Workspace:FindFirstChild('FarmSpawns')
+    if not folder then folder=Instance.new('Folder');folder.Name='FarmSpawns';folder.Parent=Workspace end
+    local name='Home_'..player.UserId
+    local spawn=folder:FindFirstChild(name)
+    if not spawn then
+        spawn=Instance.new('SpawnLocation');spawn.Name=name
+        spawn.Size=Vector3.new(6,1,6);spawn.Anchored=true;spawn.Transparency=1
+        spawn.CanCollide=false;spawn.CanTouch=false;spawn.CanQuery=false
+        spawn.Neutral=true;spawn.Duration=0;spawn.Parent=folder
+    end
+    spawn.CFrame=PlayerFarm.home(player)*CFrame.new(0,-3,0)
+    player.RespawnLocation=spawn
+end
 local function container():Folder
 	local farms=Workspace:FindFirstChild("HorseFarms") or Instance.new("Folder")
 	farms.Name="HorseFarms"; farms.Parent=Workspace
@@ -82,10 +96,13 @@ function PlayerFarm.render(player:Player,data)
 	return farm
 end
 function PlayerFarm.hireDog(player,data)
-    local farm=PlayerFarm.render(player,data)
+    local farm=container():FindFirstChild('Farm_'..player.UserId) or PlayerFarm.render(player,data)
     Guards.dog(player,farm,baseFor(player))
 end
 function PlayerFarm.remove(player:Player)
+	player.RespawnLocation=nil
+	local spawns=Workspace:FindFirstChild('FarmSpawns');local spawn=spawns and spawns:FindFirstChild('Home_'..player.UserId)
+	if spawn then spawn:Destroy() end
 	indices[player]=nil; local farms=Workspace:FindFirstChild("HorseFarms"); local parent=farms and farms:FindFirstChild("PlayerFarms")
 	local farm=parent and parent:FindFirstChild("Farm_"..player.UserId); if farm then Guards.remove(farm);farm:Destroy() end
 end

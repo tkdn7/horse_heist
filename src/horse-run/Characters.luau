@@ -37,7 +37,7 @@ function Characters.poseFarmer(model,cf,time,running)
         if not root then return end
         model.PrimaryPart=root
         local rest={}
-        for _,p in model:GetChildren() do if p:IsA('BasePart') then rest[p]=root.CFrame:ToObjectSpace(p.CFrame) end end
+        for _,p in model:GetChildren() do if p:IsA('BasePart') then rest[p]=p:GetAttribute('GuardRestCF') or root.CFrame:ToObjectSpace(p.CFrame) end end
         state={rest=rest};rigs[model]=state
     end
     local phase=time*13;local bounce=running and math.abs(math.sin(phase))*.22 or 0
