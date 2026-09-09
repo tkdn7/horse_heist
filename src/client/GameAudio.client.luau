@@ -157,7 +157,7 @@ local horseRun = ReplicatedStorage:WaitForChild("HorseRun", 10)
 local remote = horseRun and horseRun:FindFirstChild("Event")
 if remote then
 	remote.OnClientEvent:Connect(function(kind, data)
-		if kind=='Start' then farmerChase=data.chase==true and data.pvpRole~='Owner';lastAngry=-10 end
+		if kind=='Start' then farmerChase=data.chase==true and data.pvpRole~='Owner' and data.pursuerKind~='Player';lastAngry=-10 end
 		if kind == "Effect" and data then
 			if data.kind == "Carrot" then play("Pickup", 1.04)
 			elseif data.kind == "Hit" then play("Hit", 0.94) end

@@ -82,6 +82,7 @@ close.Activated:Connect(function() shade.Visible=false end)
 remote.OnClientEvent:Connect(function(kind,payload)
 	if kind~="Collection" then return end
 	data=payload; render()
+	note.Text=data.theftProtected and '추격 진행 중 · 내 모든 말 보호됨' or '농장 배치 최대 12마리 · 보호 슬롯 1개'
 	local messages={Captured="새 말을 획득해 농장에 배치했습니다.",Stolen="상대 농장의 말을 획득했습니다.",LostHorse="추격에 실패해 말을 빼앗겼습니다.",Defended="말을 안전하게 지켰습니다.",SetPlaced="배치 상태를 변경했습니다.",Protect="보호 슬롯을 변경했습니다.",FarmFull="농장에는 최대 12마리만 배치할 수 있습니다.",NotPlaced="농장에 배치된 말만 보호할 수 있습니다."}
 	status.Text=messages[payload.result] or string.format("보유 %d마리",#payload.horses)
 	local economy={Sold='판매 완료! 게임 머니를 지급했습니다.',DogHired='경비견 고용 완료! 내 농장을 지킵니다.',Money='게임 머니가 부족합니다.',CreditPending='판매는 완료됐습니다. 재접속하면 대금 지급을 복구합니다.',SalePending='저장 처리 중입니다. 재접속 시 복구합니다.',SaveUnavailable='저장 상태를 확인할 수 없어 거래를 보류했습니다.',NotOwner='소유권을 확인할 수 없습니다.',Missing='이미 판매되었거나 없는 말입니다.'}

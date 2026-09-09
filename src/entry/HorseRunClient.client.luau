@@ -28,7 +28,7 @@ local profileData={money=100,level=1,exp=0,nextExp=100,best=0,upgrades={Speed=1,
 local lane=0; local visualX=0; local visualDistance=0; local jumpAt=-10; local slideAt=-10
 local startAt=0; local hitFlash=0; local feedbackUntil=0
 local wasAirborne=false; local landUntil=0
-local track,horse,farmer
+local track,horse,farmer,ownerPursuer
 local farmerX=0;local farmerGap=24
 local chunks,rows,carrotModels={},{},{}
 local collectedCarrots={}
@@ -82,7 +82,7 @@ local expText=text('Exp',levelCard,'0 / 100 EXP',UDim2.fromOffset(91,11),UDim2.n
 local expTrack=frame('ExpTrack',levelCard,UDim2.fromOffset(14,45),UDim2.new(1,-28,0,13),Color3.fromRGB(222,229,207))
 local expFill=frame('ExpFill',expTrack,UDim2.new(),UDim2.fromScale(0,1),GOLD)
 
-local hint=text('LobbyHint',gui,'W A S D 이동  ·  마우스로 시점 회전\nNPC 말 앞에서 E키 → 안전 대기 후 탈출',UDim2.new(.5,-200,1,-74),UDim2.fromOffset(400,46),nil,PAPER)
+local hint=text('LobbyHint',gui,'W A S D 이동  ·  마우스로 시점 회전\nNPC 말 앞에서 E키 2초 누르기 → 탈출',UDim2.new(.5,-200,1,-74),UDim2.fromOffset(400,46),nil,PAPER)
 local sessionNote=text('SessionNote',gui,'STUDIO TEST · 실제 운영 저장 데이터와 분리됨',UDim2.new(.5,-260,1,-22),UDim2.fromOffset(520,17),nil,GREEN)
 local trainingShortcut=button('TrainingShortcut',gui,'훈련  ↑',UDim2.new(1,-144,1,-74),UDim2.fromOffset(124,48),function() Remote:FireServer('OpenTraining') end,GOLD)
 
@@ -147,7 +147,7 @@ button('JumpButton',runControls,'점프 ↑',UDim2.new(1,-132,1,-102),UDim2.from
 button('EndButton',runControls,'런 마치기',UDim2.new(1,-132,0,104),UDim2.fromOffset(108,34),function() Remote:FireServer('End') end)
 local abilityButton=button('AbilityButton',runControls,'능력 · Q',UDim2.new(1,-190,1,-165),UDim2.fromOffset(165,44),function() action('Ability') end,GOLD)
 abilityButton.TextSize=14
-local safetyNotice=text('SafetyNotice',gui,'안전 구역에서 말을 데려오는 중',UDim2.new(.5,-220,.35,70),UDim2.fromOffset(440,30),Enum.Font.GothamBold,PAPER)
+local safetyNotice=text('SafetyNotice',gui,'말 확보! 안전 구역에서 탈출 준비 중',UDim2.new(.5,-220,.35,70),UDim2.fromOffset(440,30),Enum.Font.GothamBold,PAPER)
 local runHint=text('RunHint',runControls,'A / D  ·  SPACE  ·  S',UDim2.new(.5,-120,1,-67),UDim2.fromOffset(240,20),nil,PAPER)
 
 local shade=frame('ResultShade',gui,UDim2.fromScale(0,0),UDim2.fromScale(1,1),Color3.fromRGB(10,30,22)); shade.BackgroundTransparency=.25
@@ -247,7 +247,7 @@ local function clearTrack()
     -- Hide immediately; spread disposal over frames instead of stalling the respawn frame.
     local oldTrack,oldHorse=track,horse
     if oldTrack then oldTrack.Parent=nil end
-    track=nil; horse=nil; farmer=nil; chunks={}; rows={}; carrotModels={}; collectedCarrots={}
+    track=nil; horse=nil; farmer=nil; ownerPursuer=nil; chunks={}; rows={}; carrotModels={}; collectedCarrots={}
     brokenObstacles={};jumpFrom=0;jumpCount=0
     laneSequence=0; pendingLanes={}; lastLaneInput=-math.huge
     task.defer(function()
@@ -428,13 +428,32 @@ Remote.OnClientEvent:Connect(function(kind,data)
         track=Instance.new('Folder'); track.Name='LocalHorseTrack'; track.Parent=workspace
         horse=Horse.clone(track,selectedHorse)
         Horse.mount(horse,player.Character)
-        if data.chase and data.pvpRole~='Owner' then farmer=Characters.farmer(track) end
+        if data.chase and data.pvpRole~='Owner' then
+            if data.pursuerKind=='Player' then
+                local currentTrack=track
+                task.spawn(function()
+                    local folder=Shared:WaitForChild('PursuitAvatars',10)
+                    local source=folder and folder:WaitForChild(data.pursuerAvatarId,10)
+                    if track~=currentTrack or not source then return end
+                    ownerPursuer=Characters.runnerAvatar(currentTrack,source)
+                    if ownerPursuer then
+                        ownerPursuer:SetAttribute('OwnerDisplayName',data.ownerName)
+                        local head=ownerPursuer:FindFirstChild('Head')
+                        if head then
+                            local gui=Instance.new('BillboardGui');gui.Name='OwnerLabel';gui.Size=UDim2.fromOffset(180,30);gui.StudsOffset=Vector3.new(0,2,0);gui.Adornee=head;gui.Parent=head
+                            local label=Instance.new('TextLabel');label.Size=UDim2.fromScale(1,1);label.BackgroundTransparency=1;label.Text=(data.ownerName or '말 주인')..' · 추격 중';label.TextColor3=PAPER;label.TextStrokeTransparency=.3;label.TextSize=16;label.Parent=gui
+                        end
+                    end
+                end)
+            else farmer=Characters.farmer(track) end
+        end
         farmerX=0;farmerGap=data.pursuerGap or 24
         local initialDistance=data.initialDistance or 0
         state={distance=initialDistance,elapsed=0,health=data.maxHealth,maxHealth=data.maxHealth,speed=data.speed,carrots=0,lane=0,jumpAt=-10,slideAt=-10,serverTime=workspace:GetServerTimeNow(),chase=data.chase,pvpRole=data.pvpRole,goalDistance=data.goalDistance,pursuerGap=data.pursuerGap}
         state.ability=data.ability or 'None';state.abilityReadyAt=0
-        if data.pvpRole=='Owner' then courseLabel.Text='내 말을 지키는 추격 · 3m 이내를 유지하면 체포'
-        elseif data.pvpRole=='Thief' then courseLabel.Text=(data.rarityName or '상대')..' 말 탈출 · 결승선까지 도망치세요'
+        state.carrotPace=data.carrotPace;state.missedCarrots=0;state.pace=1
+        if data.pvpRole=='Owner' then courseLabel.Text='동일 성능 추격 · 당근으로 속도 유지 · 3m 이내 체포'
+        elseif data.pvpRole=='Thief' then courseLabel.Text='당근으로 속도 유지 · 놓칠 때마다 기본 속도 -4%'
         else courseLabel.Text=data.chase and ((data.rarityName or 'NPC')..' 말 탈출 · 추격 거리 0이면 체포') or '초원 코스  ·  체력 0이 되면 런 종료' end
         lane=0; visualX=0; visualDistance=initialDistance; jumpAt=-10; slideAt=-10; hitFlash=0; feedback.Text=''
         wasAirborne=false; landUntil=0
@@ -474,9 +493,15 @@ Remote.OnClientEvent:Connect(function(kind,data)
             collectedCarrots[data.id]=true
             local model=carrotModels[data.id]; if model then model:Destroy(); carrotModels[data.id]=nil end
             feedback.Text=state.chase and '당근 +1' or '당근 +1  ·  체력 +1'; feedback.TextColor3=GOLD; feedbackUntil=os.clock()+.7
+        elseif data.kind=='CarrotMissed' then
+            collectedCarrots[data.id]=true
+            local model=carrotModels[data.id];if model then model:Destroy();carrotModels[data.id]=nil end
+            feedback.Text=string.format('당근 놓침 %d개 · 속도 %d%%',data.missed,math.floor(data.pace*100+.5))
+            feedback.TextColor3=Color3.fromRGB(255,192,148);feedbackUntil=os.clock()+1.1
         elseif data.kind=='Hit' then
             hitFlash=1
-            if state.pvpRole=='Owner' then feedback.Text='충돌!  도둑이 8m 멀어짐'
+            if state.carrotPace then feedback.Text='장애물 충돌! 당근을 놓치지 마세요'
+            elseif state.pvpRole=='Owner' then feedback.Text='충돌!  도둑이 8m 멀어짐'
             elseif state.chase then feedback.Text='충돌!  추격자가 8m 가까워짐'
             else feedback.Text='충돌!  체력 -15' end
             feedback.TextColor3=Color3.fromRGB(255,192,148); feedbackUntil=os.clock()+1.1
@@ -561,8 +586,15 @@ RunService.RenderStepped:Connect(function(dt)
     if farmer then
         farmerX+=(visualX-farmerX)*(1-math.exp(-dt*5))
         farmerGap+=((state.pursuerGap or 24)-farmerGap)*(1-math.exp(-dt*12))
-        Characters.poseFarmer(farmer,CFrame.new(ORIGIN+Vector3.new(farmerX,.2,-visualDistance+farmerGap)),elapsed,phase=='Running')
+        Characters.poseFarmer(farmer,CFrame.new(ORIGIN+Vector3.new(farmerX,.2,-visualDistance+farmerGap)),elapsed,phase=='Running',phase=='Running')
         farmer:SetAttribute('Gap',farmerGap)
+    end
+    if ownerPursuer then
+        farmerX+=((state.opponentX or 0)-farmerX)*(1-math.exp(-dt*18))
+        farmerGap+=((state.pursuerGap or 28)-farmerGap)*(1-math.exp(-dt*12))
+        Characters.poseRunner(ownerPursuer,CFrame.new(ORIGIN+Vector3.new(farmerX,.2,-visualDistance+farmerGap)),elapsed,phase=='Running',{
+            speed=state.opponentSpeed or state.speed,height=state.opponentHeight or 0,slide=state.opponentSliding})
+        ownerPursuer:SetAttribute('Gap',farmerGap)
     end
     gui:SetAttribute('MotionState',slideProgress and 'Slide' or (airborne and (progress<0.5 and 'Jump' or 'Air') or (landing>0 and 'Land' or (phase=='Running' and 'Run' or 'Idle'))))
     hitFlash=math.max(0,hitFlash-dt*3)
@@ -580,6 +612,7 @@ RunService.RenderStepped:Connect(function(dt)
         healthFill.Size=UDim2.fromScale(math.clamp(gap/28,0,1),1)
         healthFill.BackgroundColor3=gap<8 and Color3.fromRGB(218,76,76) or Color3.fromRGB(98,163,96)
         carrotText.Text=(state.pvpRole=='Owner' and '소유자 추격' or (chaseRarityName or '말'))..'  ·  당근 '..state.carrots
+        if state.carrotPace then carrotText.Text=string.format('당근 %d · 놓침 %d · 속도 %d%%',state.carrots,state.missedCarrots or 0,math.floor((state.pace or 1)*100+.5)) end
     else
         distanceText.Text=math.floor(visualDistance)..' m'
         local maxHealth=state.maxHealth or Config.MaxHealth

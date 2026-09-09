@@ -1,5 +1,6 @@
 local VisualRig=require(script.Parent.VisualRig)
 local Characters=require(script.Parent.Characters)
+local HorseLegs=require(script.Parent.HorseLegs)
 local Horse={}
 local states=setmetatable({},{__mode='k'})
 local templates=script.Parent:WaitForChild('Horses')
@@ -42,6 +43,7 @@ function Horse.clone(parent,name)
         end
     end
     model.Parent=parent
+    local legs=HorseLegs.build(model)
     local rig=VisualRig.capture(model,root)
     local attachment=Instance.new('Attachment');attachment.Name='SlideDustAttachment';attachment.Parent=root
     local dust=Instance.new('ParticleEmitter');dust.Name='SlideDust';dust.Texture='rbxasset://textures/particles/smoke_main.dds'
@@ -50,7 +52,7 @@ function Horse.clone(parent,name)
     dust.Size=NumberSequence.new({NumberSequenceKeypoint.new(0,.5),NumberSequenceKeypoint.new(1,2)})
     dust.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,.65),NumberSequenceKeypoint.new(1,1)})
     dust.Enabled=false;dust.Parent=attachment
-    states[model]={rig=rig,height=-bottom,seat=model:FindFirstChild('Seat',true),dust=dust,attachment=attachment,stride=0}
+    states[model]={rig=rig,legs=legs,height=-bottom,seat=model:FindFirstChild('Seat',true),dust=dust,attachment=attachment,stride=0}
     return model
 end
 function Horse.mount(model,character)
@@ -81,7 +83,7 @@ function Horse.pose(model,cf,time,running,motion)
     local t=state.stride;local offsets={}
     local active=running and not airborne and 1-slide or 0
     -- Sweep backward while planted, then lift and recover faster through the air.
-    -- The source legs are rigid pieces, so clearance comes from the existing hip/shoulder.
+    -- Two-bone foot targets plant each hoof, then fold knee/hock during recovery.
     for _,leg in gait do
         local cycle=(t/(2*math.pi)-leg.phase)%1
         local stance=.56
@@ -96,10 +98,18 @@ function Horse.pose(model,cf,time,running,motion)
         end
         local tuck=airborne and math.sin(math.pi*jump)*.65 or 0
         offsets[leg.name]=CFrame.new(0,lift*active,0)*CFrame.Angles(angle*active-tuck,0,leg.side*slide*1.3)
+        local articulated=state.legs[leg.name]
+        if articulated then
+            local hip,knee,hoof=HorseLegs.sample(articulated,cycle)
+            offsets[leg.name]=CFrame.Angles(hip*active,0,leg.side*slide*1.3)
+            offsets[leg.name..' Knee']=CFrame.Angles(knee*active,0,0)
+            offsets[leg.name..' Fetlock']=CFrame.Angles(hoof*active,0,0)
+        end
         if airborne then
             local front=leg.name:find('Shoulder')~=nil
             local knee=front and -.18 or (.22+leg.side*.12)*math.sin(math.pi*jump)
             offsets[leg.name]=CFrame.Angles((-math.pi/2+knee)*humanJump,0,leg.side*(front and 1.05 or .12)*humanJump)
+            offsets[leg.name..' Knee']=CFrame.Angles((front and -.45 or .65)*humanJump,0,0)
         end
     end
     local bob=(1-math.cos(t-1.1))*.07*active

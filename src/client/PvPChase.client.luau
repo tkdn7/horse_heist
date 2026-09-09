@@ -14,9 +14,6 @@ local function button(text,x,color)
 	b.BackgroundColor3=color; b.TextColor3=Color3.new(1,1,1); b.Font=Enum.Font.GothamBold; b.TextSize=16; b.BorderSizePixel=0; b.Parent=invite; corner(b,10); return b
 end
 local join=button("추격 참가",18,Color3.fromRGB(54,135,79)); local decline=button("NPC에게 맡기기",234,Color3.fromRGB(112,91,75))
-local boost=Instance.new("TextButton"); boost.Name="OwnerBoost"; boost.AnchorPoint=Vector2.new(1,1); boost.Position=UDim2.new(1,-26,1,-28)
-boost.Size=UDim2.fromOffset(170,58); boost.Text="가속  [F]"; boost.BackgroundColor3=Color3.fromRGB(195,151,49); boost.TextColor3=Color3.new(1,1,1)
-boost.Font=Enum.Font.GothamBlack; boost.TextSize=20; boost.BorderSizePixel=0; boost.Visible=false; boost.Parent=gui; corner(boost,14)
 local eventId=nil
 local deadline=0
 local function answer(accept)
@@ -24,14 +21,10 @@ local function answer(accept)
 	remote:FireServer("PvPRespond",{eventId=eventId,accept=accept}); invite.Visible=false; eventId=nil
 end
 join.Activated:Connect(function() answer(true) end); decline.Activated:Connect(function() answer(false) end)
-boost.Activated:Connect(function() remote:FireServer("Boost") end)
-game:GetService("UserInputService").InputBegan:Connect(function(input,processed)
-	if not processed and input.KeyCode==Enum.KeyCode.F and boost.Visible then remote:FireServer("Boost") end
-end)
 remote.OnClientEvent:Connect(function(kind,data)
 	if kind=="PvPInvitation" then
 		eventId=data.eventId; deadline=data.deadline
-		title.Text=string.format("%s님이 %s 말을 훔칩니다!\n10초 안에 직접 추격할 수 있습니다.",data.thiefName,data.rarityId)
+		title.Text=string.format("%s님이 %s 말을 훔칩니다!\n같은 말 성능으로 추격 · 당근을 먹어 속도를 유지하세요.",data.thiefName,data.rarityId)
 		join.Visible=true; decline.Visible=true
 		invite.Visible=true
 	elseif kind=="PvPWaiting" then
@@ -42,10 +35,8 @@ remote.OnClientEvent:Connect(function(kind,data)
 		else
 			invite.Visible=false
 		end
-	elseif kind=="PvPBoostReady" then
-		boost.Visible=data.visible==true; boost.Text=data.ready==false and string.format("가속 %.1f초",data.cooldown or 0) or "가속  [F]"
 	elseif kind=="Start" or kind=="Lobby" or kind=="Result" then
-		invite.Visible=false; boost.Visible=false; eventId=nil
+		invite.Visible=false; eventId=nil
 	end
 end)
 game:GetService("RunService").RenderStepped:Connect(function()

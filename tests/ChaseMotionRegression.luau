@@ -28,15 +28,15 @@ return function()
         return run
     end
     local a,b=simulate(.1),simulate(1/60)
-    assert(a.pursuerGap<20 and a.pursuerGap>0)
+    assert(math.abs(a.pursuerGap-24)<.001,'Clean running must not lose gap over time')
     assert(math.abs(a.pursuerGap-b.pursuerGap)<.01,'Pursuit balance depends on frame rate')
-    assert(Runner.pursuerSpeed(a,100000)<=32.4)
+    assert(Runner.pursuerSpeed(a,0)==32 and Runner.pursuerSpeed(a,100000)==32,'Minigame farmer must not accelerate')
     local boosted=Runner.new({mode='Chase',speed=32,ability='SpeedBoost',course={rowLength=100000},pursuerGap=12})
     boosted.distance=200;assert(Runner.input(boosted,'Ability'))
     Runner.step(boosted,.2);assert(boosted.pursuerGap>12,'Boost must still create distance')
     local pvp=Runner.new({mode='PvP',course={rowLength=100000}});pvp.distance=200
     Runner.step(pvp,.2);assert(pvp.pursuerGap==24,'NPC ramp must not affect human pursuers')
-    table.insert(results,'NPC runner closes gap gradually with bounded speed; 10/60Hz agree; boost and PvP preserved')
+    table.insert(results,'Minigame NPC constant speed and clean-run gap; 10/60Hz agree; boost and PvP preserved')
 
     local folder=Instance.new('Folder')
     for _,name in Horse.getNames() do

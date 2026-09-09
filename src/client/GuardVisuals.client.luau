@@ -113,7 +113,7 @@ RunService.PreRender:Connect(function(dt)
         e.clone.Parent=nearby and visuals or nil
         if not nearby then e.debug.Parent=nil;continue end
         if moving then e.phase+=math.min(dt,.1)*math.clamp(speed/16,.5,1.8) end
-        if e.dog then Dog.pose(e.dog,cf,e.phase,moving) else Characters.poseFarmer(e.clone,cf,e.phase,moving) end
+        if e.dog then Dog.pose(e.dog,cf,e.phase,moving) else Characters.poseFarmer(e.clone,cf,e.phase,moving,model:GetAttribute('GuardState')=='Chasing') end
         range(model,e,cf,now,speed)
     end
 end)

@@ -1,19 +1,15 @@
 local Config = require(script.Parent.Config)
 local Course = require(script.Parent.Course)
 local ChaseConfig=require(script.Parent.Parent.Shared.ChaseConfig)
+local PursuitRules=require(script.Parent.Parent.Shared.PursuitRules)
 local Runner = {}
 
 function Runner.pursuerSpeed(run,time)
-    return math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+math.min(ChaseConfig.NpcMaxSpeedAdvantage,
-        ChaseConfig.NpcStartSpeedOffset+math.max(0,time-ChaseConfig.NpcAccelerationDelay)*ChaseConfig.NpcAcceleration))
+    return math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+ChaseConfig.NpcSpeedOffset)
 end
 
 local function pursuerDistance(run,time)
-    local start=math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+ChaseConfig.NpcStartSpeedOffset)
-    local maximum=math.min(ChaseConfig.NpcMaximumSpeed,run.baseSpeed+ChaseConfig.NpcMaxSpeedAdvantage)
-    local ramp=math.max(0,time-ChaseConfig.NpcAccelerationDelay)
-    local accelerating=math.min(ramp,math.max(0,maximum-start)/ChaseConfig.NpcAcceleration)
-    return start*time+.5*ChaseConfig.NpcAcceleration*accelerating^2+(maximum-start)*math.max(0,ramp-accelerating)
+    return Runner.pursuerSpeed(run,time)*time
 end
 
 function Runner.new(stats)
@@ -24,6 +20,7 @@ function Runner.new(stats)
     local chase = stats.mode == 'Chase' or pvp
     return {distance = tonumber(stats.initialDistance) or 0, elapsed = 0, health = maxHealth, maxHealth = maxHealth,
         speed = speed, baseSpeed=speed, carrots = 0, ability=stats.ability or 'None',
+        carrotPace=stats.carrotPace==true,missedCarrots=0,pace=1,
         abilityReadyAt=0,boostUntil=-10,jumpFrom=0,jumpCount=0,broken={},pendingEffects={},
         lane = 0, x = 0, laneFrom = 0, laneAt = -10, jumpAt = -10, slideAt = -10,
         lastInput = -10, laneSequence = 0, hitAt = -10, hits = 0, done = false,
@@ -98,7 +95,8 @@ end
 function Runner.step(run, dt)
     if run.done then return {} end
     dt = math.clamp(dt, 0, 0.25)
-    run.speed=run.baseSpeed*(run.elapsed<run.boostUntil and 1.25 or 1)*(run.externalBoost or 1)
+    run.pace=run.carrotPace and PursuitRules.pace(run.missedCarrots) or 1
+    run.speed=run.baseSpeed*run.pace*(run.elapsed<run.boostUntil and 1.25 or 1)
     local previous = run.distance
     local previousTime = run.elapsed
     local nextDistance = previous + run.speed * dt
@@ -143,6 +141,9 @@ function Runner.step(run, dt)
                 run.carrots += 1
                 run.health = math.min(run.maxHealth, run.health + Config.CarrotHeal)
                 table.insert(messages, {kind='Carrot', id=event.id})
+            elseif run.carrotPace then
+                run.missedCarrots+=1
+                table.insert(messages,{kind='CarrotMissed',id=event.id,missed=run.missedCarrots,pace=PursuitRules.pace(run.missedCarrots)})
             end
         else
             local hit = false
@@ -159,7 +160,7 @@ function Runner.step(run, dt)
             end
             if hit and shouldHit then
                 run.hitAt = eventTime; run.hits += 1
-                if run.chase and not run.pvp then
+                if run.chase and not run.pvp and not run.carrotPace then
                     run.pursuerGap = math.max(0, run.pursuerGap - run.hitGapPenalty*Config.MaxHealth/run.maxHealth)
                 else
                     run.health = math.max(0, run.health - Config.Damage)

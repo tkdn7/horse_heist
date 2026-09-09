@@ -1,0 +1,64 @@
+-- Studio server only. Uses disposable rigs; no ownership or currency writes.
+return function()
+    local RS=game.ReplicatedStorage
+    local Placement=require(game.ServerScriptService.Server.CharacterPlacement)
+    local Characters=require(RS.HorseRun.Characters)
+    local Rarity=require(RS.Shared.HorseRarity)
+    local Chase=require(RS.Shared.ChaseConfig)
+    local Runner=require(RS.HorseRun.Runner)
+    local results={}
+    assert(Chase.StealHoldSeconds==2)
+    for _,rarity in Rarity.Definitions do assert(rarity.StealHoldSeconds==2) end
+    for _,prompt in workspace:GetDescendants() do
+        if prompt:IsA('ProximityPrompt') and (prompt.Name=='StealPrompt' or prompt.Name=='PlayerStealPrompt') then
+            assert(prompt.HoldDuration==2,prompt:GetFullName())
+            if prompt.Name=='PlayerStealPrompt' then assert(type(prompt:GetAttribute('OwnerUserId'))=='number') end
+        end
+    end
+    table.insert(results,'All rarities and active theft prompts hold for 2 seconds')
+
+    for _,rigType in {Enum.HumanoidRigType.R6,Enum.HumanoidRigType.R15} do
+        local rig=Instance.new('Model')
+        local root=Instance.new('Part');root.Name='HumanoidRootPart';root.Size=Vector3.new(2,2,1)
+        root.CFrame=CFrame.new(100,120,100);root.PivotOffset=CFrame.new(0,-8,0);root.Parent=rig;rig.PrimaryPart=root
+        local hum=Instance.new('Humanoid');hum.RequiresNeck=false;hum.RigType=rigType;hum.HipHeight=rigType==Enum.HumanoidRigType.R15 and 5 or 0;hum.Parent=rig
+        if rigType==Enum.HumanoidRigType.R6 then
+            local leg=Instance.new('Part');leg.Name='Left Leg';leg.Size=Vector3.new(1,4,1);leg.Parent=rig
+        end
+        local destination=CFrame.new(0,Placement.clearance(rig),0)*CFrame.Angles(0,1,0)
+        assert(Placement.move(rig,destination))
+        assert((root.Position-destination.Position).Magnitude<.001,'Model pivot buried the root')
+        assert(root.Position.Y>=5.75,'Scaled avatar clearance is too short')
+        assert(not root.Anchored and root.AssemblyLinearVelocity==Vector3.zero)
+        rig:Destroy()
+    end
+    table.insert(results,'R6/R15 scaled rigs and displaced model pivots return with root above ground')
+
+    local folder=Instance.new('Folder')
+    local farmer=Characters.farmer(folder)
+    local normal=farmer.Head.Color
+    local count=#farmer:GetChildren();Characters.equipFarmer(farmer);assert(#farmer:GetChildren()==count)
+    local hand=farmer:FindFirstChild('Hand1');local cuff=farmer:FindFirstChild('PitchforkHandle')
+    local held
+    for i=1,4 do
+        Characters.poseFarmer(farmer,CFrame.new(10,0,10),i*.2,true,true)
+        local relative=hand.CFrame:ToObjectSpace(cuff.CFrame)
+        if held then assert((relative.Position-held.Position).Magnitude<.001,'Pitchfork detached from animated hand') end
+        held=relative
+        assert(farmer.Head.Color==Color3.fromRGB(245,64,48))
+    end
+    Characters.poseFarmer(farmer,CFrame.identity,1,false,false)
+    assert(farmer.Head.Color==normal,'Calm face did not restore')
+    local saved=farmer:Clone();saved.Parent=folder
+    Characters.poseFarmer(saved,CFrame.new(15,0,0),.3,true,true)
+    assert(saved:FindFirstChild('PitchforkTine4') and saved.Head.Color==Color3.fromRGB(245,64,48))
+    folder:Destroy()
+    table.insert(results,'Red face restores on calm; pitchfork follows hand; saved/cloned farmer supported')
+
+    for _,speed in {24,32,53} do
+        local run=Runner.new({mode='Chase',speed=speed})
+        assert(Runner.pursuerSpeed(run,0)==speed and Runner.pursuerSpeed(run,1000)==speed)
+    end
+    table.insert(results,'Minigame pursuer has no elapsed-time acceleration at any horse tier')
+    return results
+end

@@ -6,6 +6,9 @@ local indices:{[Player]:number}={}
 local Visual=require(ReplicatedStorage.HorseRun.FarmVisual)
 local Rarity=require(ReplicatedStorage.Shared.HorseRarity)
 local Guards=require(script.Parent.GuardService)
+local Placement=require(script.Parent.CharacterPlacement)
+local CollectionService=game:GetService('CollectionService')
+local ChaseConfig=require(ReplicatedStorage.Shared.ChaseConfig)
 local stealHandler:((Player,Player,string,BasePart)->boolean)?=nil
 function PlayerFarm.setStealHandler(handler:(Player,Player,string,BasePart)->boolean)
 	stealHandler=handler
@@ -18,8 +21,19 @@ local function baseFor(player:Player):CFrame
     end
     return Visual.playerBase(indices[player])
 end
-function PlayerFarm.home(player:Player):CFrame
-    return baseFor(player)*CFrame.new(0,4,43)
+function PlayerFarm.home(player:Player,character:Model?):CFrame
+    local base=baseFor(player)
+    local point=base:PointToWorldSpace(Vector3.new(0,0,43))
+    local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+    local excluded={}
+    for _,other in game:GetService('Players'):GetPlayers() do
+        if other.Character then table.insert(excluded,other.Character) end
+    end
+    local spawns=Workspace:FindFirstChild('FarmSpawns');if spawns then table.insert(excluded,spawns) end
+    params.FilterDescendantsInstances=excluded;params.RespectCanCollide=true
+    local hit=Workspace:Raycast(point+Vector3.new(0,20,0),Vector3.new(0,-50,0),params)
+    local ground=hit and hit.Position.Y or point.Y+.365
+    return CFrame.new(point.X,ground+Placement.clearance(character),point.Z)*base.Rotation
 end
 function PlayerFarm.prepareSpawn(player:Player)
     local folder=Workspace:FindFirstChild('FarmSpawns')
@@ -42,6 +56,32 @@ local function container():Folder
 	result.Name="PlayerFarms"; result.Parent=farms
 	return result::Folder
 end
+local function updatePrompt(pad,prompt,locked)
+    pad:SetAttribute('FarmTheftProtected',locked)
+    prompt.Enabled=not locked and pad:GetAttribute('StealProtected')~=true and prompt:GetAttribute('Busy')~=true
+    prompt.ActionText=locked and '추격 중 · 보호됨' or '훔치기'
+    local tag=pad:FindFirstChildWhichIsA('BillboardGui')
+    local label=tag and tag:FindFirstChildWhichIsA('TextLabel')
+    if label then
+        label.Text=Rarity.get(pad:GetAttribute('RarityId')).DisplayName..((locked or pad:GetAttribute('StealProtected')) and '  🔒' or '')
+    end
+end
+function PlayerFarm.protectForTheft(player,eventId)
+    local current=player:GetAttribute('FarmTheftEvent')
+    if eventId and current and current~=eventId then return false end
+    player:SetAttribute('FarmTheftEvent',eventId)
+    local farm=container():FindFirstChild('Farm_'..player.UserId)
+    if farm then
+        farm:SetAttribute('FarmTheftProtected',eventId~=nil)
+        for _,prompt in farm:GetDescendants() do
+            if prompt:IsA('ProximityPrompt') and prompt.Name=='PlayerStealPrompt' then updatePrompt(prompt.Parent,prompt,eventId~=nil) end
+        end
+    end
+    return true
+end
+function PlayerFarm.releaseTheftProtection(player,eventId)
+    if player:GetAttribute('FarmTheftEvent')==eventId then PlayerFarm.protectForTheft(player,nil) end
+end
 function PlayerFarm.render(player:Player,data)
 	local parent=container(); local name="Farm_"..player.UserId
 	local farm=parent:FindFirstChild(name)
@@ -51,6 +91,7 @@ function PlayerFarm.render(player:Player,data)
         Visual.player(farm,base,player.DisplayName)
     end
     Visual.alignPlayer(farm,base)
+    farm:SetAttribute('FarmTheftProtected',player:GetAttribute('FarmTheftEvent')~=nil)
     local old=farm:FindFirstChild("Displays");if old then old:Destroy() end
     local displays=Instance.new("Folder",farm);displays.Name="Displays"
     local placed={}
@@ -75,19 +116,22 @@ function PlayerFarm.render(player:Player,data)
 			text.Text=rarity.DisplayName..(protected and "  🔒" or ""); text.TextColor3=rarity.Color; text.Parent=tag
 			pad:SetAttribute("StealProtected",protected)
 			local prompt=Instance.new("ProximityPrompt"); prompt.Name="PlayerStealPrompt"; prompt.ActionText="훔치기"
-			prompt.ObjectText=player.DisplayName.."의 "..horse.RarityId.." 말"; prompt.HoldDuration=0
+			prompt.ObjectText=player.DisplayName.."의 "..horse.RarityId.." 말"; prompt.HoldDuration=ChaseConfig.StealHoldSeconds
+			prompt:SetAttribute('OwnerUserId',player.UserId)
+			CollectionService:AddTag(prompt,'PlayerHorseStealPrompt')
 			prompt.MaxActivationDistance=10; prompt.RequiresLineOfSight=false; prompt.Enabled=not protected; prompt.Parent=pad
+			updatePrompt(pad,prompt,player:GetAttribute('FarmTheftEvent')~=nil)
 			prompt.Triggered:Connect(function(thief)
-				if thief==player or prompt:GetAttribute("Busy")==true or not stealHandler then return end
+				if thief==player or player:GetAttribute('FarmTheftEvent') or thief:GetAttribute('FarmTheftEvent') or prompt:GetAttribute("Busy")==true or not stealHandler then return end
 				prompt:SetAttribute("Busy",true); prompt.Enabled=false
 				if not stealHandler(thief,player,horse.Id,pad) then
-					prompt:SetAttribute("Busy",false); prompt.Enabled=pad:GetAttribute("StealProtected")~=true
+					prompt:SetAttribute("Busy",false); updatePrompt(pad,prompt,player:GetAttribute('FarmTheftEvent')~=nil)
 				end
 			end)
 			if protectionLeft>0 and not selectedProtection then
 				task.delay(protectionLeft+.1,function()
 					if pad.Parent and prompt.Parent and prompt:GetAttribute("Busy")~=true then
-						pad:SetAttribute("StealProtected",false); prompt.Enabled=true; text.Text=rarity.DisplayName
+						pad:SetAttribute("StealProtected",false); updatePrompt(pad,prompt,player:GetAttribute('FarmTheftEvent')~=nil)
 					end
 				end)
 			end

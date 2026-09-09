@@ -79,7 +79,7 @@ local function addPrompt(slot:Model,rarity)
 	if not pad or not pad:IsA("BasePart") then return end
 	local old=pad:FindFirstChild("StealPrompt"); if old then old:Destroy() end
 	local prompt=Instance.new("ProximityPrompt"); prompt.Name="StealPrompt"; prompt.ActionText="훔치기"
-	prompt.ObjectText=rarity.DisplayName.." 말 · 안전 대기 후 탈출"; prompt.HoldDuration=0
+	prompt.ObjectText=rarity.DisplayName.." 말 · 2초간 눌러 훔치기"; prompt.HoldDuration=ChaseConfig.StealHoldSeconds
 	prompt.MaxActivationDistance=10; prompt.RequiresLineOfSight=false
 	prompt.Enabled=slot:GetAttribute("Occupied")==true; prompt.Parent=pad; connect(slot,prompt)
 end

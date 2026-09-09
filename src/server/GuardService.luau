@@ -159,6 +159,7 @@ RunService.Heartbeat:Connect(function(dt)
         a.model:SetAttribute('GuardState',chasing and 'Chasing' or 'Patrolling')
         a.model:SetAttribute('TargetUserId',a.target and a.target.UserId or nil)
         a.model:SetAttribute('GuardCF',a.cf);a.model:SetAttribute('GuardMoving',moving)
+        if not a.dog then Characters.setFarmerAngry(a.model,chasing) end
         a.model:SetAttribute('GuardSpeed',speed)
         a.model:SetAttribute('GuardSnapshotAt',workspace:GetServerTimeNow())
     end
