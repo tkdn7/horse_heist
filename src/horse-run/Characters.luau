@@ -1,6 +1,7 @@
 local VisualRig=require(script.Parent.VisualRig)
 local Characters={}
 local rigs=setmetatable({},{__mode='k'})
+local headParts={Head=true,Eye=true,Brow=true,Mustache=true,HatBrim=true,StrawHat=true}
 local function part(parent,name,size,cf,color)
     local p=Instance.new('Part');p.Name=name;p.Size=size;p.CFrame=cf;p.Color=color;p.Anchored=true
     p.CanCollide=false;p.CanTouch=false;p.CanQuery=false;p.TopSurface=Enum.SurfaceType.Smooth;p.BottomSurface=Enum.SurfaceType.Smooth;p.Parent=parent;return p
@@ -10,21 +11,25 @@ function Characters.equipFarmer(model)
     local head=model:FindFirstChild('Head')
     if not root or not head then return end
     if head:GetAttribute('FarmerSkinColor')==nil then head:SetAttribute('FarmerSkinColor',head.Color) end
-    if model:FindFirstChild('PitchforkHandle') then return end
+    if model:GetAttribute('PitchforkGripVersion')==2 and model:FindFirstChild('PitchforkHandle') then return end
     -- Remove only the generated obsolete prop, including saved display copies.
     for _,p in model:GetChildren() do
-        if p:GetAttribute('FarmerHandProp') and p.Name:match('^Handcuff') then p:Destroy() end
+        if p:GetAttribute('FarmerHandProp') and (p.Name:match('^Handcuff') or p.Name:match('^Pitchfork')) then p:Destroy() end
     end
+    -- The shaft runs forward through the palm; every piece shares the hand's animation.
+    local grip=CFrame.new(1.52,2.05,-.15)*CFrame.Angles(-math.pi/2,0,0)
     local function tool(name,size,rest,color,material)
+        rest=grip*rest
         local p=part(model,name,size,root.CFrame*rest,color)
         p.Material=material;p:SetAttribute('FarmerHandProp',true);p:SetAttribute('GuardRestCF',rest)
     end
-    tool('PitchforkHandle',Vector3.new(.2,3.6,.2),CFrame.new(1.52,2.5,-.52),Color3.fromRGB(132,88,46),Enum.Material.Wood)
+    tool('PitchforkHandle',Vector3.new(.2,3.6,.2),CFrame.new(0,.35,0),Color3.fromRGB(132,88,46),Enum.Material.Wood)
     local metal=Color3.fromRGB(158,170,181)
-    tool('PitchforkCrossbar',Vector3.new(1.3,.18,.22),CFrame.new(1.52,4.25,-.52),metal,Enum.Material.Metal)
+    tool('PitchforkCrossbar',Vector3.new(1.3,.18,.22),CFrame.new(0,2.1,0),metal,Enum.Material.Metal)
     for i=1,4 do
-        tool('PitchforkTine'..i,Vector3.new(.13,1.05,.13),CFrame.new(1.52+(i-2.5)*.38,4.83,-.6)*CFrame.Angles(-.12,0,0),metal,Enum.Material.Metal)
+        tool('PitchforkTine'..i,Vector3.new(.13,1.05,.13),CFrame.new((i-2.5)*.38,2.68,-.08)*CFrame.Angles(-.12,0,0),metal,Enum.Material.Metal)
     end
+    model:SetAttribute('PitchforkGripVersion',2)
     rigs[model]=nil
 end
 
@@ -35,8 +40,8 @@ function Characters.setFarmerAngry(model,angry)
     local gui=head:FindFirstChild('FarmerLabel')
     local label=gui and gui:FindFirstChildWhichIsA('TextLabel')
     if label then
-        label.Text=angry and '!! 거기 서! !!' or '농장주'
-        label.TextColor3=angry and Color3.fromRGB(255,85,65) or Color3.fromRGB(255,218,129)
+        label.Text='농장주'
+        label.TextColor3=Color3.fromRGB(255,218,129)
     end
 end
 
@@ -62,10 +67,13 @@ function Characters.farmer(parent)
     local label=Instance.new('TextLabel',ui);label.Size=UDim2.fromScale(1,1);label.BackgroundTransparency=1;label.Text='농장주';label.TextColor3=Color3.fromRGB(255,218,129);label.Font=Enum.Font.GothamBold;label.TextSize=20;label.TextStrokeTransparency=.3
     Characters.equipFarmer(m)
     m.Parent=parent
-    local rest={};for _,p in m:GetChildren() do if p:IsA('BasePart') then rest[p]=p.CFrame end end
+    local rest={};for _,p in m:GetChildren() do if p:IsA('BasePart') then
+        rest[p]=p.CFrame;p:SetAttribute('GuardRestCF',p.CFrame)
+        if headParts[p.Name] then p:SetAttribute('FarmerRestSize',p.Size) end
+    end end
     rigs[m]={rest=rest};return m
 end
-function Characters.poseFarmer(model,cf,time,running,angry)
+function Characters.poseFarmer(model,cf,time,running,angry,animationTime)
     local state=rigs[model]
     if not state then
         Characters.equipFarmer(model)
@@ -78,16 +86,28 @@ function Characters.poseFarmer(model,cf,time,running,angry)
         state={rest=rest};rigs[model]=state
     end
     Characters.setFarmerAngry(model,angry==true)
-    local phase=time*13;local bounce=running and math.abs(math.sin(phase))*.22 or 0
+    local weight=type(running)=='number' and math.clamp(running,0,1) or (running and 1 or 0)
+    local phase=time*13;local bounce=math.abs(math.sin(phase))*.22*weight
+    local headScale=angry and 1+.35*(1-math.cos((animationTime or time)*2*math.pi/.9))/2 or 1
+    local neck=Vector3.new(0,4.3,0)
     for p,rest in state.rest do
         local offset=rest
         for _,side in {-1,1} do
-            local swing=running and math.sin(phase)*side*.8 or 0
+            local swing=math.sin(phase)*side*.8*weight
             if p.Name=='Leg'..side or p.Name=='Boot'..side then
                 offset=CFrame.new(side*.57,2.1,0)*CFrame.Angles(swing,0,0)*CFrame.new(-side*.57,-2.1,0)*rest
             elseif p.Name=='Arm'..side or p.Name=='Hand'..side or (side==1 and p:GetAttribute('FarmerHandProp')) then
-                offset=CFrame.new(side*1.52,4.1,0)*CFrame.Angles(-swing-.25,0,side*.1)*CFrame.new(-side*1.52,-4.1,0)*rest
+                local armAngle=side==1 and (-.12-swing*.12) or (-swing-.25)
+                offset=CFrame.new(side*1.52,4.1,0)*CFrame.Angles(armAngle,0,side*.04)*CFrame.new(-side*1.52,-4.1,0)*rest
             end
+        end
+        if headParts[p.Name] then
+            local size=p:GetAttribute('FarmerRestSize')
+            if not size then size=p.Size;p:SetAttribute('FarmerRestSize',size) end
+            if p.Size~=size*headScale then p.Size=size*headScale end
+            offset=CFrame.new(neck+(rest.Position-neck)*headScale)*rest.Rotation
+            local label=p:FindFirstChild('FarmerLabel')
+            if label then label.StudsOffset=Vector3.new(0,2*headScale,0) end
         end
         p.CFrame=cf*CFrame.new(0,bounce,0)*offset
     end

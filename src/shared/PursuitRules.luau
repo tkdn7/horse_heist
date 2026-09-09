@@ -1,7 +1,7 @@
-local Rules={MissPenalty=.04,MinimumPace=.60}
+local Rules={MissGapPenalty=2,HitGapPenalty=6}
 
-function Rules.pace(missed)
-    return math.max(Rules.MinimumPace,1-math.max(0,missed)*Rules.MissPenalty)
+function Rules.gap(thief,owner)
+    return math.max(0,thief.distance-owner.distance-(thief.penaltyDistance or 0)+(owner.penaltyDistance or 0))
 end
 
 -- Both roles copy the contested horse, never the owner's upgrades or a role bonus.

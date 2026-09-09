@@ -1,15 +1,20 @@
 local Placement={}
 
-function Placement.clearance(character)
+function Placement.groundRootY(character,groundY)
     local root=character and character:FindFirstChild('HumanoidRootPart')
     local hum=character and character:FindFirstChildOfClass('Humanoid')
-    if not root or not hum then return 4 end
-    local height=root.Size.Y*.5+hum.HipHeight
-    if hum.RigType==Enum.HumanoidRigType.R6 then
-        local leg=character:FindFirstChild('Left Leg')
-        height+=leg and leg.Size.Y or 2
+    if not root or not hum then return groundY+4 end
+    local lowest=0
+    for _,part in character:GetDescendants() do
+        if part:IsA('BasePart') and part.Transparency<1 then
+            local localCF=root.CFrame:ToObjectSpace(part.CFrame)
+            local half=part.Size*.5
+            local extent=math.abs(localCF.XVector.Y)*half.X+math.abs(localCF.YVector.Y)*half.Y+math.abs(localCF.ZVector.Y)*half.Z
+            lowest=math.min(lowest,localCF.Position.Y-extent)
+        end
     end
-    return math.max(4,height+.75)
+    -- Leave a small clearance so shoes do not z-fight with the farm floor.
+    return groundY-lowest+.05
 end
 
 function Placement.move(character,destination)
@@ -18,8 +23,8 @@ function Placement.move(character,destination)
     if not root or not hum or hum.Health<=0 then return false end
     root.Anchored=true
     -- PivotOffset/accessories can put the model pivot below the actual root.
-    local rootToPivot=root.CFrame:ToObjectSpace(character:GetPivot())
-    character:PivotTo(destination*rootToPivot)
+    local pivotToRoot=character:GetPivot():ToObjectSpace(root.CFrame)
+    character:PivotTo(destination*pivotToRoot:Inverse())
     root.AssemblyLinearVelocity=Vector3.zero;root.AssemblyAngularVelocity=Vector3.zero
     hum.Sit=false;hum.PlatformStand=false
     root.Anchored=false

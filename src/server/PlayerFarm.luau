@@ -33,7 +33,7 @@ function PlayerFarm.home(player:Player,character:Model?):CFrame
     params.FilterDescendantsInstances=excluded;params.RespectCanCollide=true
     local hit=Workspace:Raycast(point+Vector3.new(0,20,0),Vector3.new(0,-50,0),params)
     local ground=hit and hit.Position.Y or point.Y+.365
-    return CFrame.new(point.X,ground+Placement.clearance(character),point.Z)*base.Rotation
+    return CFrame.new(point.X,Placement.groundRootY(character,ground),point.Z)*base.Rotation
 end
 function PlayerFarm.prepareSpawn(player:Player)
     local folder=Workspace:FindFirstChild('FarmSpawns')
@@ -92,17 +92,28 @@ function PlayerFarm.render(player:Player,data)
     end
     Visual.alignPlayer(farm,base)
     farm:SetAttribute('FarmTheftProtected',player:GetAttribute('FarmTheftEvent')~=nil)
-    local old=farm:FindFirstChild("Displays");if old then old:Destroy() end
-    local displays=Instance.new("Folder",farm);displays.Name="Displays"
+    local displays=farm:FindFirstChild('Displays')
+    if not displays then displays=Instance.new('Folder');displays.Name='Displays';displays.Parent=farm end
     local placed={}
 	for _,horse in data.Horses do if horse.Placed and #placed<12 then table.insert(placed,horse) end end
 	local templates=ReplicatedStorage:WaitForChild("HorseRun"):WaitForChild("Horses")
-	for index=1,12 do
-		local cf=Visual.slot(base,index)
+    for index=1,12 do
+        local cf=Visual.slot(base,index)
+        local horse=placed[index]
+        local key=horse and table.concat({horse.Id,horse.TemplateId,horse.RarityId,tostring(horse.ProtectedUntil),tostring(data.ProtectedHorseId==horse.Id)},'|') or 'Empty'
+        local previous=displays:FindFirstChild('Stall'..index)
+        if previous and previous:GetAttribute('HorseRenderKey')==key then
+            local pad=previous:FindFirstChild('Slot'..index)
+            local prompt=pad and pad:FindFirstChild('PlayerStealPrompt')
+            if prompt then updatePrompt(pad,prompt,player:GetAttribute('FarmTheftEvent')~=nil) end
+            continue
+        end
+        -- Only the changed stall is rebuilt; the other horses keep their instances.
+        if previous then previous:Destroy() end
         local display=Instance.new("Folder",displays);display.Name="Stall"..index
+        display:SetAttribute('HorseRenderKey',key)
 		local pad=Instance.new("Part"); pad.Name="Slot"..index; pad.Anchored=true; pad.Size=Vector3.new(11,1,11)
 		pad.CFrame=cf; pad.Material=Enum.Material.Grass; pad.Color=Color3.fromRGB(91,135,78); pad.Parent=display
-		local horse=placed[index]
 		if horse then
 			pad:SetAttribute("HorseId",horse.Id); pad:SetAttribute("RarityId",horse.RarityId)
 			local rarity=Rarity.get(horse.RarityId)

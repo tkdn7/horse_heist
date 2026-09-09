@@ -8,6 +8,13 @@ local Dog=require(RS.HorseRun:WaitForChild('GuardDog'))
 local TAG='HorseHeistGuard'
 local visuals=Instance.new('Folder');visuals.Name='LocalGuardVisuals';visuals.Parent=workspace
 local entries={}
+local function push(e,t,cf,moving,speed)
+    if type(t)~='number' or typeof(cf)~='CFrame' then return end
+    local last=e.samples[#e.samples]
+    if last and t<=last.time then return end
+    table.insert(e.samples,{time=t,cf=cf,moving=moving,speed=speed or 0})
+    if #e.samples>24 then table.remove(e.samples,1) end
+end
 
 local function line(parent,name)
     local p=Instance.new('Part');p.Name=name;p.Anchored=true;p.CanCollide=false;p.CanTouch=false;p.CanQuery=false
@@ -42,7 +49,7 @@ local function add(model)
         elseif p:IsA('BillboardGui') then hidden[p]=p.Enabled;p.Enabled=false end
     end
     local debugModel=Instance.new('Model');debugModel.Name='Detection_'..model.Name
-    local e={clone=clone,hidden=hidden,samples={},phase=0,debug=debugModel,lines={},debugAt=0}
+    local e={clone=clone,hidden=hidden,samples={},playback={},debug=debugModel,lines={},debugAt=0}
     e.dog=model:GetAttribute('GuardKind')=='Dog' and Dog.capture(clone) or nil
     for i=1,26 do e.lines[i]=line(debugModel,'View_'..i) end
     for i=1,4 do e.lines[26+i]=line(debugModel,'FarmBoundary_'..i) end
@@ -52,10 +59,7 @@ local function add(model)
     label.TextColor3=Color3.new(1,1,1);label.TextStrokeTransparency=.25;label.TextSize=14;label.Parent=gui;e.label=label
     local function snapshot()
         local t=model:GetAttribute('GuardSnapshotAt');local pose=model:GetAttribute('GuardCF')
-        if type(t)~='number' or typeof(pose)~='CFrame' then return end
-        local last=e.samples[#e.samples];if last and t<=last.time then return end
-        table.insert(e.samples,{time=t,cf=pose,moving=model:GetAttribute('GuardMoving'),speed=model:GetAttribute('GuardSpeed') or 0})
-        if #e.samples>12 then table.remove(e.samples,1) end
+        push(e,t,pose,model:GetAttribute('GuardMoving'),model:GetAttribute('GuardSpeed'))
     end
     e.connection=model:GetAttributeChangedSignal('GuardSnapshotAt'):Connect(snapshot)
     snapshot();entries[model]=e;clone.Parent=visuals
@@ -103,17 +107,31 @@ end
 CollectionService:GetInstanceAddedSignal(TAG):Connect(add)
 CollectionService:GetInstanceRemovedSignal(TAG):Connect(remove)
 for _,model in CollectionService:GetTagged(TAG) do add(model) end
+RS.HorseRun:WaitForChild('GuardSnapshot').OnClientEvent:Connect(function(t,packet)
+    for _,snapshot in packet do
+        local model=snapshot.model
+        if typeof(model)=='Instance' and CollectionService:HasTag(model,TAG) then
+            if not entries[model] then add(model) end
+            if entries[model] then push(entries[model],t,snapshot.cf,snapshot.moving,snapshot.speed) end
+        end
+    end
+end)
+local retryAt=0
 RunService.PreRender:Connect(function(dt)
     local now=workspace:GetServerTimeNow();local camera=workspace.CurrentCamera
+    -- Tags may arrive before a streamed model's PrimaryPart/attributes.
+    if now>=retryAt then
+        retryAt=now+.5
+        for _,model in CollectionService:GetTagged(TAG) do if not entries[model] then add(model) end end
+    end
     for model,e in entries do
         if not model:IsDescendantOf(workspace) then remove(model);continue end
-        local cf,moving,speed=Motion.sample(e.samples,now-Config.VisualDelay)
+        local cf,blend,phase,speed=Motion.render(e.playback,e.samples,now,dt)
         if not cf then continue end
         local nearby=camera and (camera.CFrame.Position-cf.Position).Magnitude<Config.VisualDistance
         e.clone.Parent=nearby and visuals or nil
         if not nearby then e.debug.Parent=nil;continue end
-        if moving then e.phase+=math.min(dt,.1)*math.clamp(speed/16,.5,1.8) end
-        if e.dog then Dog.pose(e.dog,cf,e.phase,moving) else Characters.poseFarmer(e.clone,cf,e.phase,moving,model:GetAttribute('GuardState')=='Chasing') end
+        if e.dog then Dog.pose(e.dog,cf,phase,blend) else Characters.poseFarmer(e.clone,cf,phase,blend,model:GetAttribute('GuardState')=='Chasing',now) end
         range(model,e,cf,now,speed)
     end
 end)

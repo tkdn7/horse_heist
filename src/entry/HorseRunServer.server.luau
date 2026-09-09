@@ -19,6 +19,8 @@ local PlayerFarm = require(ServerModules:WaitForChild('PlayerFarm'))
 local CharacterPlacement = require(ServerModules:WaitForChild('CharacterPlacement'))
 local Characters = require(Shared.Characters)
 local PursuitRules = require(GlobalShared.PursuitRules)
+local PvpResolution = require(ServerModules:WaitForChild('PvpResolution'))
+local RunCompletion = require(ServerModules:WaitForChild('RunCompletion'))
 local pursuitAvatars=Shared:FindFirstChild('PursuitAvatars') or Instance.new('Folder')
 pursuitAvatars.Name='PursuitAvatars';pursuitAvatars.Parent=Shared
 local Remote = Shared:WaitForChild('Event')
@@ -39,6 +41,7 @@ local chaseRequest = signal('NpcHorseChaseRequest', 'BindableFunction')
 local chaseResolved = signal('NpcHorseChaseResolved', 'BindableEvent')
 
 local function send(player, kind, data)
+    if kind=='Result' then RunCompletion.finish(sessions[player],data) end
     if kind=='State' then
         local run=sessions[player] and sessions[player].run
         if run then
@@ -118,6 +121,18 @@ local function restore(player,expectedCharacter)
     end
 end
 
+local function beginCompletion(player,session,extra)
+    if not RunCompletion.begin(session) then return end
+    -- Return the existing avatar before saving ownership or rebuilding displays.
+    restore(player)
+    local run=session.run
+    local data={serial=session.serial,chase=run and run.chase or false,
+        distance=math.floor(run and run.distance or 0),goalDistance=run and run.goalDistance,
+        carrots=run and run.carrots or 0,hits=run and run.hits or 0}
+    for key,value in extra or {} do data[key]=value end
+    send(player,'RunEnded',data)
+end
+
 local function setup(player)
     if sessions[player] then return end
     -- Assign the streaming/spawn destination before any data-store requests can yield.
@@ -171,6 +186,11 @@ local function setup(player)
     if loadError then send(player, 'SaveStatus', {ok = false, mode = PlayerStore.mode, reason = 'Load'}) end
 
     player.CharacterAdded:Connect(function(character)
+        if session.completing then
+            session.returnAfterCompletion=true
+            send(player,'Lobby',{})
+            return
+        end
         local activePvp=session.pvpEvent or pvpByPlayer[player]
         if activePvp and cancelPvp then
             task.defer(cancelPvp, activePvp, 'CharacterReset')
@@ -188,8 +208,7 @@ end
 
 local function finish(player, session, reason)
     if session.phase ~= 'Running' then return end
-    session.phase = 'Results'
-    session.run.done = true
+    beginCompletion(player,session)
     if session.run.chase then
         local success = reason == 'Escaped'
         local target = session.chaseTarget
@@ -224,11 +243,6 @@ local function finish(player, session, reason)
             serial = session.serial,
         })
         session.chaseTarget = nil
-        if reason=='Captured' then
-            player:SetAttribute('TheftProtected',false)
-            local hum=player.Character and player.Character:FindFirstChildOfClass('Humanoid')
-            if hum then hum.Health=0 end
-        end
         return
     end
     local money, exp = Runner.reward(session.run)
@@ -350,7 +364,7 @@ cancelPvp = function(event, reason)
     clearPvp(event)
     for _, player in {event.thief, event.owner} do
         local session = sessions[player]
-        if session and session.pvpEvent == event then
+        if session then
             session.pvpEvent = nil; session.phase = 'Lobby'; session.run = nil; session.chaseTarget = nil
             restore(player); send(player, 'PvPCancelled', {reason = reason}); send(player, 'Lobby', {})
             sendCollection(player, session)
@@ -360,7 +374,7 @@ end
 
 local function pvpStartPayload(event, role, run)
     return {
-        startAt = event.startAt, serial = sessions[role == 'Thief' and event.thief or event.owner].serial,
+        eventId=event.id,startAt = event.startAt, serial = sessions[role == 'Thief' and event.thief or event.owner].serial,
         speed = run.speed, maxHealth = run.maxHealth, ability=run.ability, chase = true, pvpRole = role,
         initialDistance = run.distance, goalDistance = event.goalDistance, pursuerGap = ChaseConfig.OwnerInitialGap,
         rarityId = event.rarityId, rarityName = HorseRarity.get(event.rarityId).DisplayName,
@@ -403,7 +417,7 @@ local function startPvp(event, ownerJoined)
         send(event.owner, 'Start', pvpStartPayload(event, 'Owner', ownerSession.run))
     else
         ownerSession.phase = 'Lobby'; ownerSession.pvpEvent = nil
-        send(event.owner, 'PvPWaiting', {message = 'NPC가 대신 추격합니다.'})
+        send(event.owner, 'PvPWaiting', {eventId=event.id,role='Owner',delegated=true,message = 'NPC가 대신 추격합니다.'})
     end
 end
 
@@ -427,10 +441,16 @@ local function transferHorse(event)
     return true
 end
 
-local function finishPvp(event, outcome)
-    if event.state ~= 'RunningPlayers' and event.state ~= 'RunningNpc' then return end
-    event.state = 'Finished'
+local function finishPvp(event, outcome, actor, eventId)
+    local resolution=PvpResolution.begin(event,outcome,actor,eventId)
+    if not resolution then return end
+    outcome=resolution.outcome
     local thiefSession, ownerSession = sessions[event.thief], sessions[event.owner]
+    for role,pair in {Thief={event.thief,thiefSession},Owner={event.owner,ownerSession}} do
+        if pair[2] and (role=='Thief' or event.ownerJoined or resolution.giveUpBy) then
+            beginCompletion(pair[1],pair[2],{chase=true,pvpRole=role,eventId=event.id})
+        end
+    end
     local escaped = outcome == 'Escaped'
     local transferred, transferReason = false, nil
     if escaped then
@@ -444,8 +464,9 @@ local function finishPvp(event, outcome)
     if thiefSession then
         thiefSession.pvpEvent = nil; thiefSession.phase = 'Results'
         if thiefRun then thiefRun.done = true end
-        PlayerFarm.render(event.thief, thiefSession.horseData); sendCollection(event.thief, thiefSession, transferred and 'Stolen' or nil)
-        send(event.thief, 'Result', {chase = true, pvpRole = 'Thief', success = escaped, reason = outcome,
+        if transferred then PlayerFarm.render(event.thief, thiefSession.horseData) end
+        sendCollection(event.thief, thiefSession, transferred and 'Stolen' or nil)
+        send(event.thief, 'Result', {eventId=event.id,giveUpBy=resolution.giveUpBy,chase = true, pvpRole = 'Thief', success = escaped, reason = outcome,
             distance = math.floor(thiefRun and thiefRun.distance or 0), goalDistance = event.goalDistance,
             carrots = thiefRun and thiefRun.carrots or 0, hits = thiefRun and thiefRun.hits or 0,
             pursuerGap = event.lastGap or ChaseConfig.OwnerInitialGap, rarityId = event.rarityId,
@@ -454,11 +475,12 @@ local function finishPvp(event, outcome)
     end
     if ownerSession then
         ownerSession.pvpEvent = nil
-        PlayerFarm.render(event.owner, ownerSession.horseData); sendCollection(event.owner, ownerSession, transferred and 'LostHorse' or 'Defended')
-        if event.ownerJoined then
+        if transferred then PlayerFarm.render(event.owner, ownerSession.horseData) end
+        sendCollection(event.owner, ownerSession, transferred and 'LostHorse' or 'Defended')
+        if event.ownerJoined or resolution.giveUpBy then
             ownerSession.phase = 'Results'
             if ownerRun then ownerRun.done = true end
-            send(event.owner, 'Result', {chase = true, pvpRole = 'Owner', success = not escaped, reason = outcome,
+            send(event.owner, 'Result', {eventId=event.id,giveUpBy=resolution.giveUpBy,chase = true, pvpRole = 'Owner', success = not escaped, reason = outcome,
                 distance = math.floor(ownerRun and ownerRun.distance or 0), goalDistance = event.goalDistance,
                 carrots = ownerRun and ownerRun.carrots or 0, hits = ownerRun and ownerRun.hits or 0,
                 pursuerGap = event.lastGap or ChaseConfig.OwnerInitialGap, rarityId = event.rarityId,
@@ -466,6 +488,7 @@ local function finishPvp(event, outcome)
                 money = 0, exp = 0, levelUps = 0, level = ownerSession.data.Level, serial = ownerSession.serial})
         else
             ownerSession.phase = 'Lobby'
+            send(event.owner,'PvPResolved',{eventId=event.id})
         end
     end
 end
@@ -491,9 +514,10 @@ PlayerFarm.setStealHandler(function(thief, owner, horseId, pad)
     PlayerFarm.protectForTheft(thief,event.id);PlayerFarm.protectForTheft(owner,event.id)
     sendCollection(thief,thiefSession);sendCollection(owner,ownerSession)
     thiefSession.pvpEvent = event; ownerSession.pvpEvent = event
+    thiefSession.run=nil;ownerSession.run=nil
     thiefSession.phase = 'PvPWaiting'; ownerSession.phase = 'PvPInvited'; pad:SetAttribute('ActiveStealId', event.id)
     if not anchorForRun(thief) then cancelPvp(event,'CharacterUnavailable');return false end
-    send(thief, 'PvPWaiting', {eventId = event.id, ownerName = owner.DisplayName, deadline = event.deadline})
+    send(thief, 'PvPWaiting', {eventId = event.id, role='Thief',ownerName = owner.DisplayName, deadline = event.deadline})
     send(owner, 'PvPInvitation', {eventId = event.id, thiefName = thief.DisplayName,
         rarityId = horse.RarityId, horseName = horse.TemplateId, deadline = event.deadline})
     return true
@@ -520,8 +544,11 @@ Remote.OnServerEvent:Connect(function(player, action, argument)
         if event and event.owner == player and event.state == 'Pending' and argument.eventId == event.id then
             startPvp(event, argument.accept == true)
         end
-    elseif action == 'End' and session.pvpEvent then
-        cancelPvp(session.pvpEvent, 'Stopped')
+    elseif action == 'PvPGiveUp' and type(argument)=='table' then
+        finishPvp(pvpByPlayer[player],nil,player,argument.eventId)
+    elseif action == 'End' and pvpByPlayer[player] then
+        local event=pvpByPlayer[player]
+        finishPvp(event,nil,player,event.id)
     elseif action == 'Ready' then
         sendProfile(player, session)
         if session.phase == 'Lobby' then send(player, 'Lobby', {}) end
@@ -532,9 +559,7 @@ Remote.OnServerEvent:Connect(function(player, action, argument)
         if destination and hum and hum.Health>0 then CharacterPlacement.move(character,destination) end
     elseif action == 'Start' then
         startRun(player)
-    elseif action == 'Lobby' and session.phase == 'Results' then
-        session.phase = 'Lobby'
-        session.run = nil
+    elseif action == 'Lobby' and RunCompletion.returnToLobby(session) then
         restore(player)
         send(player, 'Lobby', {})
         sendProfile(player, session)
@@ -627,7 +652,7 @@ RunService.Heartbeat:Connect(function(dt)
                 local ownerEvents = Runner.step(ownerSession.run, dt)
                 for _, item in thiefEvents do send(event.thief, 'Effect', item) end
                 for _, item in ownerEvents do send(event.owner, 'Effect', item) end
-                local gap = math.max(0, thiefSession.run.distance - ownerSession.run.distance)
+                local gap = PursuitRules.gap(thiefSession.run,ownerSession.run)
                 event.lastGap = gap
                 event.catchHeld = gap <= ChaseConfig.PlayerCatchDistance and event.catchHeld + dt or 0
                 if event.catchHeld >= ChaseConfig.PlayerCatchHoldSeconds then finishPvp(event, 'Captured')

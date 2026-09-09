@@ -23,9 +23,10 @@ function Dog.create(parent)
     return {model=m,poses=poses}
 end
 function Dog.pose(dog,cf,time,running)
+    local weight=type(running)=='number' and math.clamp(running,0,1) or (running and 1 or 0)
     for p,rest in dog.poses do
         local side,z=p.Name:match('Leg_([%-0-9]+)_([%-0-9]+)')
-        local swing=side and running and math.sin(time*14)*tonumber(side)*tonumber(z)*.55 or 0
+        local swing=side and math.sin(time*14)*tonumber(side)*tonumber(z)*.55*weight or 0
         p.CFrame=cf*rest*CFrame.Angles(swing,0,0)
     end
 end

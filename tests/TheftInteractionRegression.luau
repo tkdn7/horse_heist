@@ -25,10 +25,10 @@ return function()
         if rigType==Enum.HumanoidRigType.R6 then
             local leg=Instance.new('Part');leg.Name='Left Leg';leg.Size=Vector3.new(1,4,1);leg.Parent=rig
         end
-        local destination=CFrame.new(0,Placement.clearance(rig),0)*CFrame.Angles(0,1,0)
+        local destination=CFrame.new(0,Placement.groundRootY(rig,0),0)*CFrame.Angles(0,1,0)
         assert(Placement.move(rig,destination))
         assert((root.Position-destination.Position).Magnitude<.001,'Model pivot buried the root')
-        assert(root.Position.Y>=5.75,'Scaled avatar clearance is too short')
+        assert(root.Position.Y>=.05,'Scaled avatar clearance is too short')
         assert(not root.Anchored and root.AssemblyLinearVelocity==Vector3.zero)
         rig:Destroy()
     end
@@ -37,6 +37,7 @@ return function()
     local folder=Instance.new('Folder')
     local farmer=Characters.farmer(folder)
     local normal=farmer.Head.Color
+    local normalSize=farmer.Head.Size
     local count=#farmer:GetChildren();Characters.equipFarmer(farmer);assert(#farmer:GetChildren()==count)
     local hand=farmer:FindFirstChild('Hand1');local cuff=farmer:FindFirstChild('PitchforkHandle')
     local held
@@ -45,15 +46,25 @@ return function()
         local relative=hand.CFrame:ToObjectSpace(cuff.CFrame)
         if held then assert((relative.Position-held.Position).Magnitude<.001,'Pitchfork detached from animated hand') end
         held=relative
+        assert(math.abs(cuff.CFrame.UpVector.Y)<.25,'Pitchfork is not horizontal')
         assert(farmer.Head.Color==Color3.fromRGB(245,64,48))
     end
     Characters.poseFarmer(farmer,CFrame.identity,1,false,false)
     assert(farmer.Head.Color==normal,'Calm face did not restore')
+    assert((farmer.Head.Size-normalSize).Magnitude<.001,'Calm head size did not restore')
+    Characters.poseFarmer(farmer,CFrame.identity,0,false,true,.45)
+    assert((farmer.Head.Size-normalSize*1.35).Magnitude<.001,'Angry head did not inflate')
+    assert((farmer.StrawHat.Size-farmer.StrawHat:GetAttribute('FarmerRestSize')*1.35).Magnitude<.001,'Hat left behind by head scaling')
+    local swollen=farmer:Clone();swollen.Parent=folder
+    Characters.poseFarmer(swollen,CFrame.identity,0,false,false)
+    assert((swollen.Head.Size-normalSize).Magnitude<.001,'Cloning a swollen head compounded its scale')
+    Characters.poseFarmer(farmer,CFrame.identity,0,false,true,.9)
+    assert((farmer.Head.Size-normalSize).Magnitude<.001,'Angry head did not return between pulses')
     local saved=farmer:Clone();saved.Parent=folder
     Characters.poseFarmer(saved,CFrame.new(15,0,0),.3,true,true)
     assert(saved:FindFirstChild('PitchforkTine4') and saved.Head.Color==Color3.fromRGB(245,64,48))
     folder:Destroy()
-    table.insert(results,'Red face restores on calm; pitchfork follows hand; saved/cloned farmer supported')
+    table.insert(results,'Horizontal pitchfork stays in hand; head and hat pulse 1–1.35x, return to rest, and survive cloning without scale drift')
 
     for _,speed in {24,32,53} do
         local run=Runner.new({mode='Chase',speed=speed})

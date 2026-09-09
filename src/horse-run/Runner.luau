@@ -20,7 +20,7 @@ function Runner.new(stats)
     local chase = stats.mode == 'Chase' or pvp
     return {distance = tonumber(stats.initialDistance) or 0, elapsed = 0, health = maxHealth, maxHealth = maxHealth,
         speed = speed, baseSpeed=speed, carrots = 0, ability=stats.ability or 'None',
-        carrotPace=stats.carrotPace==true,missedCarrots=0,pace=1,
+        carrotPace=stats.carrotPace==true,missedCarrots=0,pace=1,penaltyDistance=0,
         abilityReadyAt=0,boostUntil=-10,jumpFrom=0,jumpCount=0,broken={},pendingEffects={},
         lane = 0, x = 0, laneFrom = 0, laneAt = -10, jumpAt = -10, slideAt = -10,
         lastInput = -10, laneSequence = 0, hitAt = -10, hits = 0, done = false,
@@ -95,7 +95,7 @@ end
 function Runner.step(run, dt)
     if run.done then return {} end
     dt = math.clamp(dt, 0, 0.25)
-    run.pace=run.carrotPace and PursuitRules.pace(run.missedCarrots) or 1
+    run.pace=1
     run.speed=run.baseSpeed*run.pace*(run.elapsed<run.boostUntil and 1.25 or 1)
     local previous = run.distance
     local previousTime = run.elapsed
@@ -113,6 +113,10 @@ function Runner.step(run, dt)
     end
     table.sort(events, function(a,b) return a.distance < b.distance end)
     local messages = run.pendingEffects;run.pendingEffects={}
+    local function penalize(distance)
+        run.penaltyDistance+=distance
+        if run.chase and not run.pvp then run.pursuerGap-=distance end
+    end
     local time = previousTime
     local function advance(target)
         local delta = target - time
@@ -143,7 +147,8 @@ function Runner.step(run, dt)
                 table.insert(messages, {kind='Carrot', id=event.id})
             elseif run.carrotPace then
                 run.missedCarrots+=1
-                table.insert(messages,{kind='CarrotMissed',id=event.id,missed=run.missedCarrots,pace=PursuitRules.pace(run.missedCarrots)})
+                penalize(PursuitRules.MissGapPenalty)
+                table.insert(messages,{kind='CarrotMissed',id=event.id,missed=run.missedCarrots,gapPenalty=PursuitRules.MissGapPenalty})
             end
         else
             local hit = false
@@ -160,12 +165,16 @@ function Runner.step(run, dt)
             end
             if hit and shouldHit then
                 run.hitAt = eventTime; run.hits += 1
-                if run.chase and not run.pvp and not run.carrotPace then
+                local gapPenalty
+                if run.carrotPace then
+                    gapPenalty=PursuitRules.HitGapPenalty
+                    penalize(gapPenalty)
+                elseif run.chase and not run.pvp then
                     run.pursuerGap = math.max(0, run.pursuerGap - run.hitGapPenalty*Config.MaxHealth/run.maxHealth)
                 else
                     run.health = math.max(0, run.health - Config.Damage)
                 end
-                table.insert(messages, {kind='Hit', obstacle=event.kind})
+                table.insert(messages, {kind='Hit', obstacle=event.kind,gapPenalty=gapPenalty})
                 if not run.chase and run.health <= 0 then
                     run.distance = event.distance; run.elapsed = eventTime; run.done = true
                     break

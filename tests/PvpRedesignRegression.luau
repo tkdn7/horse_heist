@@ -5,7 +5,7 @@ return function()
     local Runner=require(RS.HorseRun.Runner)
     local Course=require(RS.HorseRun.Course)
     local Horse=require(RS.HorseRun.Horse)
-    local Legs=require(RS.HorseRun.HorseLegs)
+    local Resolution=require(game.ServerScriptService.Server.PvpResolution)
     local Characters=require(RS.HorseRun.Characters)
     local Farm=require(game.ServerScriptService.Server.PlayerFarm)
     local results={}
@@ -38,18 +38,56 @@ return function()
     local bad=Runner.new(Rules.stats(traits,0,course,false))
     collect(good,false);collect(bad,true)
     assert(good.carrots==2 and good.missedCarrots==0 and good.speed==42)
-    assert(bad.carrots==0 and bad.missedCarrots==2 and math.abs(bad.speed-42*.92)<.001)
-    assert(Rules.pace(1000)==.6 and Rules.pace(0)==1)
+    assert(bad.carrots==0 and bad.missedCarrots==2 and bad.speed==42)
+    assert(bad.penaltyDistance==4 and good.penaltyDistance==0)
+    local hit=Runner.new(Rules.stats(traits,0,course,false))
+    local obstacle=Course.row(0,course)
+    hit.distance=obstacle.distance-1;hit.lane=obstacle.lanes[1];hit.laneFrom=hit.lane*8
+    Runner.step(hit,.1)
+    assert(hit.hits==1 and hit.penaltyDistance==6,'PvP collisions need a finite distance penalty')
+    local thief=Runner.new(Rules.stats(traits,200,{rowLength=100000},false))
+    local owner=Runner.new(Rules.stats(traits,172,{rowLength=100000},false))
+    thief.penaltyDistance=10;owner.penaltyDistance=6
+    for _=1,200 do Runner.step(thief,.1);Runner.step(owner,.1) end
+    assert(math.abs(Rules.gap(thief,owner)-24)<.001,'A past mistake must not cause permanent catch-up')
     local legacy=Runner.new({speed=42});collect(legacy,true);assert(legacy.speed==42 and legacy.missedCarrots==0)
-    local npc=Runner.new(Rules.stats(traits,0,{rowLength=100000},true));npc.distance=200;npc.pursuerGap=5;npc.missedCarrots=6
-    for _=1,100 do Runner.step(npc,.1) end
-    assert(npc.done and npc.outcome=='Captured','Missing carrots must let a constant-speed NPC catch up')
-    table.insert(results,'Collected carrots retain speed; each miss reduces 4%, floor 60%; misses cause capture; normal mode unaffected')
+    for _,dt in {.1,1/60} do
+        local npc=Runner.new(Rules.stats(traits,0,{rowLength=100000},true))
+        npc.distance=200;npc.pursuerGap=14;npc.penaltyDistance=10;npc.missedCarrots=2
+        for _=1,math.floor(20/dt) do Runner.step(npc,dt) end
+        assert(not npc.done and math.abs(npc.pursuerGap-14)<.001 and npc.speed==42)
+    end
+    local npc=Runner.new(Rules.stats(traits,0,course,true));npc.pursuerGap=3
+    collect(npc,true)
+    assert(npc.done and npc.outcome=='Captured','Repeated misses must still lead to capture')
+    table.insert(results,'Carrot miss costs 2m, collision 6m; both roles retain speed; clean gaps hold at 10/60Hz; repeated misses capture')
+
+    local ownerActor,thiefActor,outsider={},{},{}
+    for _,state in {'Pending','RunningPlayers','RunningNpc'} do
+        for _,role in {'Owner','Thief'} do
+            local match={id='match',state=state,owner=ownerActor,thief=thiefActor}
+            assert(not Resolution.begin(match,nil,outsider,'match'))
+            assert(not Resolution.begin(match,nil,ownerActor,'old-match'))
+            assert(match.state==state,'Rejected request consumed the match')
+            local actor=role=='Owner' and ownerActor or thiefActor
+            local settled=assert(Resolution.begin(match,nil,actor,'match'))
+            assert(settled.giveUpBy==role and settled.outcome==(role=='Owner' and 'Escaped' or 'Captured'))
+            assert(not Resolution.begin(match,nil,actor,'match'),'Repeated request resolved twice')
+            assert(not Resolution.begin(match,'Escaped'),'Finish line raced with surrender')
+        end
+    end
+    local cancelled={id='match',state='Cancelled',owner=ownerActor,thief=thiefActor}
+    assert(not Resolution.begin(cancelled,nil,ownerActor,'match'))
+    table.insert(results,'Both roles can surrender pending/running/NPC-delegated matches; stale IDs, outsiders, duplicates and finish races rejected')
 
     local fixtures={}
     local ok,err=pcall(function()
         for i=1,2 do
-            local p=Instance.new('Player');p.UserId=-991120-i;p.Name='ProtectionFixture'..i
+            -- Player-shaped fixture: Studio MCP cannot construct engine Player instances.
+            local attributes={}
+            local p={UserId=-991120-i,DisplayName='ProtectionFixture'..i}
+            function p:GetAttribute(key) return attributes[key] end
+            function p:SetAttribute(key,value) attributes[key]=value end
             local data={Horses={{Id='fixture-'..i,TemplateId='Horse1',RarityId='Gold',Placed=true,ProtectedUntil=0},
                 {Id='protected-'..i,TemplateId='Horse2',RarityId='Silver',Placed=true,ProtectedUntil=os.time()+300}}}
             table.insert(fixtures,p)
@@ -68,7 +106,7 @@ return function()
             assert(not farm.Displays.Stall2.Slot2.PlayerStealPrompt.Enabled,'Existing protection lost on unlock')
         end
     end)
-    for _,p in fixtures do Farm.remove(p);p:Destroy() end
+    for _,p in fixtures do Farm.remove(p) end
     assert(ok,tostring(err))
     table.insert(results,'Both farms fully locked across re-render; competing event rejected; token-safe unlock preserves existing horse protection')
 
@@ -77,23 +115,23 @@ return function()
         local original=RS.HorseRun.Horses:FindFirstChild(name)
         local count=#original:GetDescendants()
         local horse=Horse.clone(folder,name)
-        assert(horse:GetAttribute('ArticulatedLegCount')==4)
-        for _,jointName in {'Left Hip','Right Hip','Left Shoulder','Right Shoulder'} do
-            local lower=horse:FindFirstChild(jointName..' Lower')
-            local upper=horse:FindFirstChild(jointName..' Upper')
-            local knee=upper:FindFirstChild(jointName..' Knee')
-            local min,max=math.huge,-math.huge
-            for frame=1,60 do
-                Horse.pose(horse,CFrame.identity,frame/60,true,{speed=42})
-                local a=(upper.CFrame*knee.C0).Position;local b=(lower.CFrame*knee.C1).Position
-                assert((a-b).Magnitude<.001,'Knee joint disconnected')
-                local angle=upper.CFrame.LookVector:Dot(lower.CFrame.LookVector)
-                min=math.min(min,angle);max=math.max(max,angle)
-            end
-            assert(max-min>.1,'Knee stayed rigid')
+        local function partCount(model)
+            local n=0;for _,d in model:GetDescendants() do if d:IsA('BasePart') then n+=1 end end;return n
+        end
+        assert(partCount(horse)==partCount(original),'Procedural geometry added to horse')
+        for _,partName in {'Left Leg','Right Leg','Left Arm','Right Arm'} do
+            local limb=assert(horse:FindFirstChild(partName,true))
+            local source=original:FindFirstChild(partName,true)
+            assert(limb.ClassName==source.ClassName and limb.Transparency==source.Transparency)
+            Horse.pose(horse,CFrame.identity,.5,true,{speed=42})
+            -- This asset uses invisible rig limbs with sculpted visible pieces welded onto them.
+            assert(limb.Transparency==source.Transparency and (limb.Size-source.Size).Magnitude<.001)
         end
         assert(#original:GetDescendants()==count,'Source template mutated')
-        assert(original:FindFirstChild('Left Arm',true).Transparency<1)
+        local sourceVisible,cloneVisible=0,0
+        for _,d in original:GetDescendants() do if d:IsA('BasePart') and d.Transparency<1 then sourceVisible+=1 end end
+        for _,d in horse:GetDescendants() do if d:IsA('BasePart') and d.Transparency<1 then cloneVisible+=1 end end
+        assert(sourceVisible>0 and cloneVisible==sourceVisible,'Original visible geometry changed')
         Horse.clear(horse)
     end
     local current=game.Players:GetPlayers()[1]
@@ -106,6 +144,6 @@ return function()
         assert(runner:FindFirstChildOfClass('Humanoid').RigType==current.Character.Humanoid.RigType)
     end
     folder:Destroy()
-    table.insert(results,'All three horse clones articulate four knees without altering originals; owner avatar clone animates without scripts')
+    table.insert(results,'All three templates retain their original visible limbs without added geometry; owner avatar clone animates without scripts')
     return results
 end

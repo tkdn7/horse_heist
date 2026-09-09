@@ -452,8 +452,9 @@ Remote.OnClientEvent:Connect(function(kind,data)
         state={distance=initialDistance,elapsed=0,health=data.maxHealth,maxHealth=data.maxHealth,speed=data.speed,carrots=0,lane=0,jumpAt=-10,slideAt=-10,serverTime=workspace:GetServerTimeNow(),chase=data.chase,pvpRole=data.pvpRole,goalDistance=data.goalDistance,pursuerGap=data.pursuerGap}
         state.ability=data.ability or 'None';state.abilityReadyAt=0
         state.carrotPace=data.carrotPace;state.missedCarrots=0;state.pace=1
-        if data.pvpRole=='Owner' then courseLabel.Text='동일 성능 추격 · 당근으로 속도 유지 · 3m 이내 체포'
-        elseif data.pvpRole=='Thief' then courseLabel.Text='당근으로 속도 유지 · 놓칠 때마다 기본 속도 -4%'
+        runControls.EndButton.Visible=data.pvpRole==nil
+        if data.pvpRole=='Owner' then courseLabel.Text='동일 성능 추격 · 당근 놓침 2m / 충돌 6m 불리 · 3m 이내 체포'
+        elseif data.pvpRole=='Thief' then courseLabel.Text='실수 없으면 거리 유지 · 당근 놓침 2m / 충돌 6m 불리'
         else courseLabel.Text=data.chase and ((data.rarityName or 'NPC')..' 말 탈출 · 추격 거리 0이면 체포') or '초원 코스  ·  체력 0이 되면 런 종료' end
         lane=0; visualX=0; visualDistance=initialDistance; jumpAt=-10; slideAt=-10; hitFlash=0; feedback.Text=''
         wasAirborne=false; landUntil=0
@@ -496,23 +497,36 @@ Remote.OnClientEvent:Connect(function(kind,data)
         elseif data.kind=='CarrotMissed' then
             collectedCarrots[data.id]=true
             local model=carrotModels[data.id];if model then model:Destroy();carrotModels[data.id]=nil end
-            feedback.Text=string.format('당근 놓침 %d개 · 속도 %d%%',data.missed,math.floor(data.pace*100+.5))
+            feedback.Text=string.format(state.pvpRole=='Owner' and '당근 놓침! 도둑이 %dm 멀어짐' or '당근 놓침! 추격자가 %dm 가까워짐',data.gapPenalty or 2)
             feedback.TextColor3=Color3.fromRGB(255,192,148);feedbackUntil=os.clock()+1.1
         elseif data.kind=='Hit' then
             hitFlash=1
-            if state.carrotPace then feedback.Text='장애물 충돌! 당근을 놓치지 마세요'
+            if state.carrotPace then feedback.Text=string.format(state.pvpRole=='Owner' and '충돌! 도둑이 %dm 멀어짐' or '충돌! 추격자가 %dm 가까워짐',data.gapPenalty or 6)
             elseif state.pvpRole=='Owner' then feedback.Text='충돌!  도둑이 8m 멀어짐'
             elseif state.chase then feedback.Text='충돌!  추격자가 8m 가까워짐'
             else feedback.Text='충돌!  체력 -15' end
             feedback.TextColor3=Color3.fromRGB(255,192,148); feedbackUntil=os.clock()+1.1
         end
+    elseif kind=='RunEnded' then
+        phase='Results';state.distance=data.distance;visualDistance=data.distance
+        gui:SetAttribute('MotionState','Idle')
+        resultTitle.Text='달리기 종료 · 결과 확인 중'
+        resultDistance.Text=string.format('%d m',data.distance)
+        resultStats.Text=string.format('당근 %d개 · 충돌 %d회\n지금 마을로 돌아가도 결과는 반영됩니다.',data.carrots or 0,data.hits or 0)
+        replayButton.Visible=false
+        visibility()
     elseif kind=='Result' then
-        phase='Results'; state.distance=data.distance; visualDistance=data.distance
+        if not data.background then phase='Results';state.distance=data.distance;visualDistance=data.distance end
         if data.chase then
             if data.reason=='TransferPending' or data.reason=='IndexWriteFailed' or data.reason=='JournalFinalizeFailed' or data.reason=='CompletedReadFailed' then
                 resultTitle.Text='소유권 이전 처리 중 · 재접속 시 자동 복구됩니다'
             elseif data.reason=='SaveFailed' or data.reason=='TransferFailed' or data.reason=='Protected' or data.reason=='Missing' or data.reason=='PlayerLeft' or data.reason=='NotOwner' then
                 resultTitle.Text='소유권 확인 실패 · 말은 이전되지 않았습니다'
+            elseif data.pvpRole and data.reason~='Captured' and data.reason~='Escaped' then
+                resultTitle.Text='소유권 처리를 완료하지 못했습니다 · 잠시 후 다시 확인해 주세요'
+            elseif data.giveUpBy and (data.reason=='Escaped' or data.reason=='Captured') then
+                if data.pvpRole=='Owner' then resultTitle.Text=data.success and '상대가 포기했습니다 · 말을 지켰습니다' or '추격을 포기하고 말을 넘겼습니다'
+                else resultTitle.Text=data.success and '주인이 포기했습니다 · 말을 획득했습니다' or '훔치기를 포기했습니다 · 원래 주인이 말을 유지합니다' end
             elseif data.pvpRole=='Owner' then resultTitle.Text=data.success and '방어 성공!  말을 지켰습니다' or '말을 빼앗겼습니다'
             else resultTitle.Text=data.success and '탈출 성공!  말을 획득했습니다' or '체포되었습니다' end
             resultDistance.Text=string.format('%d / %d m',data.distance,data.goalDistance or data.distance)
@@ -526,7 +540,7 @@ Remote.OnClientEvent:Connect(function(kind,data)
             replayButton.Visible=true
         end
         gui:SetAttribute('LastReward',data.money); gui:SetAttribute('LastDistance',data.distance)
-        visibility()
+        if data.background then sessionNote.Text=resultTitle.Text else visibility() end
     end
 end)
 
@@ -612,7 +626,7 @@ RunService.RenderStepped:Connect(function(dt)
         healthFill.Size=UDim2.fromScale(math.clamp(gap/28,0,1),1)
         healthFill.BackgroundColor3=gap<8 and Color3.fromRGB(218,76,76) or Color3.fromRGB(98,163,96)
         carrotText.Text=(state.pvpRole=='Owner' and '소유자 추격' or (chaseRarityName or '말'))..'  ·  당근 '..state.carrots
-        if state.carrotPace then carrotText.Text=string.format('당근 %d · 놓침 %d · 속도 %d%%',state.carrots,state.missedCarrots or 0,math.floor((state.pace or 1)*100+.5)) end
+        if state.carrotPace then carrotText.Text=string.format('당근 %d · 놓침 %d · 실수할 때만 거리 패널티',state.carrots,state.missedCarrots or 0) end
     else
         distanceText.Text=math.floor(visualDistance)..' m'
         local maxHealth=state.maxHealth or Config.MaxHealth

@@ -9,6 +9,8 @@ local Characters=require(Shared.HorseRun.Characters)
 local Dog=require(Shared.HorseRun.GuardDog)
 local Guards={}
 local agents={}
+local snapshots=Shared.HorseRun:FindFirstChild('GuardSnapshot') or Instance.new('RemoteEvent')
+snapshots.Name='GuardSnapshot';snapshots.Parent=Shared.HorseRun
 function Guards.inside(base,half,position)
     local p=base:PointToObjectSpace(position)
     return math.abs(p.X)<=half.X and math.abs(p.Z)<=half.Z and math.abs(p.Y)<25
@@ -50,7 +52,7 @@ local function attach(key,model,base,half,owner,dog)
     model:SetAttribute('GuardSpeed',0);model:SetAttribute('GuardSnapshotAt',workspace:GetServerTimeNow())
     agents[key]={model=model,base=base,half=half,owner=owner,dog=dog,
         cf=cf,patrol=1,voice=sound,voiceAt=-10,pathAt=-10,path={},node=1,lastSeen=0,
-        pathVersion=0,chaseAt=nil}
+        pathVersion=0,chaseAt=nil,snapshotAt=0}
     CollectionService:AddTag(model,'HorseHeistGuard')
 end
 function Guards.farmer(farm)
@@ -70,6 +72,8 @@ local accumulated=0
 RunService.Heartbeat:Connect(function(dt)
     accumulated+=dt;if accumulated<Config.Tick then return end
     local step=math.min(accumulated,.25);accumulated=0;local now=os.clock()
+    local timestamp=workspace:GetServerTimeNow()
+    local packet={}
     for key,a in agents do
         if not a.model:IsDescendantOf(workspace) then agents[key]=nil;continue end
         local root,humanoid
@@ -158,10 +162,16 @@ RunService.Heartbeat:Connect(function(dt)
         a.model:PivotTo(a.cf)
         a.model:SetAttribute('GuardState',chasing and 'Chasing' or 'Patrolling')
         a.model:SetAttribute('TargetUserId',a.target and a.target.UserId or nil)
-        a.model:SetAttribute('GuardCF',a.cf);a.model:SetAttribute('GuardMoving',moving)
         if not a.dog then Characters.setFarmerAngry(a.model,chasing) end
-        a.model:SetAttribute('GuardSpeed',speed)
-        a.model:SetAttribute('GuardSnapshotAt',workspace:GetServerTimeNow())
+        table.insert(packet,{model=a.model,cf=a.cf,moving=moving,speed=moving and speed or 0})
+        -- Durable bootstrap for streaming/new clients; active animation uses one atomic packet.
+        if now-a.snapshotAt>=.5 then
+            a.snapshotAt=now
+            a.model:SetAttribute('GuardCF',a.cf);a.model:SetAttribute('GuardMoving',moving)
+            a.model:SetAttribute('GuardSpeed',moving and speed or 0)
+            a.model:SetAttribute('GuardSnapshotAt',timestamp)
+        end
     end
+    if #packet>0 then snapshots:FireAllClients(timestamp,packet) end
 end)
 return Guards

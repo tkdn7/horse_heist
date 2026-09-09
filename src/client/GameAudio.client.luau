@@ -55,12 +55,21 @@ local function play(name, playbackSpeed)
 end
 
 local loopTweens = {}
-local function setLoop(name, enabled, playbackSpeed)
+local loopEnabled = {}
+local function setLoop(name, enabled, playbackSpeed, immediate)
 	local sound = sounds[name]
 	local definition = DEFINITIONS[name]
 	if not sound or not definition then return end
-	if loopTweens[name] then loopTweens[name]:Cancel() end
-	sound.PlaybackSpeed = playbackSpeed or sound.PlaybackSpeed
+    sound.PlaybackSpeed = playbackSpeed or sound.PlaybackSpeed
+    if not enabled and immediate then
+        loopEnabled[name]=false
+        if loopTweens[name] then loopTweens[name]:Cancel();loopTweens[name]=nil end
+        sound.Volume=0;sound:Stop()
+        return
+    end
+    if loopEnabled[name]==enabled then return end
+    loopEnabled[name]=enabled
+    if loopTweens[name] then loopTweens[name]:Cancel() end
 	if enabled then
 		if not sound.Playing then
 			sound.Volume = 0
@@ -71,7 +80,7 @@ local function setLoop(name, enabled, playbackSpeed)
 	else
 		loopTweens[name] = TweenService:Create(sound, TweenInfo.new(0.12), {Volume = 0})
 		loopTweens[name].Completed:Once(function()
-			if sound.Volume <= 0.01 then sound:Stop() end
+            if not loopEnabled[name] and sound.Volume <= 0.01 then sound:Stop() end
 		end)
 	end
 	loopTweens[name]:Play()
@@ -83,17 +92,25 @@ local lastMotion = "Idle"
 local farmerChase=false
 local lastAngry=-10
 
+local function updateGallop()
+    local motion=horseGui and horseGui:GetAttribute('MotionState') or 'Idle'
+    local grounded=motion=='Run' or motion=='Land'
+    setLoop('Gallop',phase=='Running' and grounded,1,not grounded or phase~='Running')
+end
+
 local function updatePhase()
 	phase = horseGui and horseGui:GetAttribute("Phase") or "Lobby"
-	setLoop("Gallop", phase == "Running", 1)
+    updateGallop()
 	if phase ~= "Lobby" then setLoop("Footsteps", false) end
 end
 
 local function updateMotion()
 	if not horseGui then return end
-	local motion = horseGui:GetAttribute("MotionState") or "Idle"
-	if motion == lastMotion then return end
-	if motion == "Jump" then
+    local motion = horseGui:GetAttribute("MotionState") or "Idle"
+    updateGallop()
+    if motion == lastMotion then return end
+    if phase~='Running' then lastMotion=motion;return end
+    if motion == "Jump" then
 		play("Jump", 1.03)
 	elseif motion == "Land" then
 		play("Land", 0.9)
@@ -161,10 +178,12 @@ if remote then
 		if kind == "Effect" and data then
 			if data.kind == "Carrot" then play("Pickup", 1.04)
 			elseif data.kind == "Hit" then play("Hit", 0.94) end
-		elseif kind == "Result" then
+        elseif kind == "RunEnded" or kind == "Result" then
 			sounds.FarmerAngry:Stop();farmerChase=false
-			setLoop("Gallop", false)
-			if data and data.chase and not data.success then play("Hit", 0.8) else play("Success", 1) end
+            setLoop("Gallop", false,nil,true)
+            if kind=='Result' then
+                if data and data.chase and not data.success then play("Hit", 0.8) else play("Success", 1) end
+            end
 		elseif kind == "Lobby" then
 			sounds.FarmerAngry:Stop();farmerChase=false
 			setLoop("Gallop", false)
