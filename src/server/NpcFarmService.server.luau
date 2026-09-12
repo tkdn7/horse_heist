@@ -10,6 +10,7 @@ local ChaseConfig=require(Shared:WaitForChild("ChaseConfig"))
 local Visual=require(ReplicatedStorage.HorseRun.FarmVisual)
 local Traits=require(Shared.HorseTraits)
 local Guards=require(script.Parent.GuardService)
+local SlotLifecycle=require(script.Parent.NpcSlotLifecycle)
 local random=Random.new()
 local SLOT_COUNT=6
 local function folder(parent:Instance,name:string):Folder
@@ -87,7 +88,7 @@ local function populate(slot:Model)
 	clearManaged(slot)
 	local index=slot:GetAttribute("SlotIndex") or tonumber(slot.Name:match("%d+")) or 1
 	local rarity=HorseRarity.choose(random); local templateName="Horse"..(((index-1)%3)+1)
-	slot:SetAttribute("Occupied",true); slot:SetAttribute("LockedBy",nil)
+	slot:SetAttribute("Occupied",true); slot:SetAttribute("LockedBy",nil);slot:SetAttribute("CooldownUntil",nil)
 	slot:SetAttribute("HorseId",HttpService:GenerateGUID(false)); slot:SetAttribute("TemplateId",templateName)
 	slot:SetAttribute("RarityId",rarity.Id); slot:SetAttribute("StealHoldSeconds",rarity.StealHoldSeconds)
 	local traits=Traits.roll(rarity.Id,random)
@@ -124,18 +125,19 @@ local function reconnect(slot:Model)
 end
 -- Each server rolls its own NPC stock; player-owned collections are separate.
 for i=1,SLOT_COUNT do populate(ensureSlot(i)) end
-resolved.Event:Connect(function(slot,success)
+resolved.Event:Connect(function(slot,_success)
 	if typeof(slot)~="Instance" or not slot:IsDescendantOf(npcFarm) then return end
-	slot:SetAttribute("LockedBy",nil); local prompt=slot:FindFirstChild("StealPrompt",true)
-	if success then
-		slot:SetAttribute("Occupied",false); if prompt then prompt.Enabled=false end
-		local horse=slot:FindFirstChild("DisplayHorse"); if horse then horse:Destroy() end
-        local effects=slot:FindFirstChild("RarityEffects");if effects then effects:Destroy() end
-		setLabel(slot,"60초 후 보충",Color3.fromRGB(220,220,220))
-		task.delay(ChaseConfig.SlotRefillSeconds,function()
-			if slot.Parent and slot:GetAttribute("Occupied")==false then populate(slot) end
-		end)
-	elseif prompt then prompt.Enabled=true end
+	local refillAt=SlotLifecycle.beginCooldown(slot,Workspace:GetServerTimeNow(),ChaseConfig.SlotRefillSeconds)
+	if not refillAt then return end
+	task.spawn(function()
+		while slot.Parent and slot:GetAttribute("CooldownUntil")==refillAt do
+			local remaining=SlotLifecycle.remaining(refillAt,Workspace:GetServerTimeNow())
+			if remaining<=0 then break end
+			setLabel(slot,string.format("%d초 후 보충",remaining),Color3.fromRGB(220,220,220))
+			task.wait(math.min(1,remaining))
+		end
+		if slot.Parent and slot:GetAttribute("Occupied")==false and slot:GetAttribute("CooldownUntil")==refillAt then populate(slot) end
+	end)
 end)
 Players.PlayerRemoving:Connect(function(player)
 	for _,slot in npcFarm:GetChildren() do

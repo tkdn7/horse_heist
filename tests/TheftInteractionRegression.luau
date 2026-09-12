@@ -6,6 +6,7 @@ return function()
     local Rarity=require(RS.Shared.HorseRarity)
     local Chase=require(RS.Shared.ChaseConfig)
     local Runner=require(RS.HorseRun.Runner)
+    local SlotLifecycle=require(game.ServerScriptService.Server.NpcSlotLifecycle)
     local results={}
     assert(Chase.StealHoldSeconds==2)
     for _,rarity in Rarity.Definitions do assert(rarity.StealHoldSeconds==2) end
@@ -16,6 +17,20 @@ return function()
         end
     end
     table.insert(results,'All rarities and active theft prompts hold for 2 seconds')
+
+    assert(Chase.SlotRefillSeconds==60)
+    local slot=Instance.new('Model');slot:SetAttribute('Occupied',true);slot:SetAttribute('LockedBy',123)
+    local pad=Instance.new('Part');pad.Name='DisplayPad';pad.Parent=slot
+    local prompt=Instance.new('ProximityPrompt');prompt.Name='StealPrompt';prompt.Parent=pad
+    local horse=Instance.new('Model');horse.Name='DisplayHorse';horse.Parent=slot
+    local effects=Instance.new('Folder');effects.Name='RarityEffects';effects.Parent=slot
+    local refillAt=assert(SlotLifecycle.beginCooldown(slot,100,Chase.SlotRefillSeconds))
+    assert(refillAt==160 and slot:GetAttribute('Occupied')==false and slot:GetAttribute('LockedBy')==nil)
+    assert(slot:GetAttribute('CooldownUntil')==160 and not slot:FindFirstChild('DisplayHorse') and not pad:FindFirstChild('StealPrompt'))
+    assert(SlotLifecycle.remaining(refillAt,100)==60 and SlotLifecycle.remaining(refillAt,159.2)==1 and SlotLifecycle.remaining(refillAt,161)==0)
+    assert(SlotLifecycle.beginCooldown(slot,100,60)==nil,'An empty slot restarted its cooldown')
+    slot:Destroy()
+    table.insert(results,'Every resolved NPC theft consumes the horse and starts one 60-second slot cooldown')
 
     for _,rigType in {Enum.HumanoidRigType.R6,Enum.HumanoidRigType.R15} do
         local rig=Instance.new('Model')

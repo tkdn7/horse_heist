@@ -528,7 +528,7 @@ Remote.OnClientEvent:Connect(function(kind,data)
                 if data.pvpRole=='Owner' then resultTitle.Text=data.success and '상대가 포기했습니다 · 말을 지켰습니다' or '추격을 포기하고 말을 넘겼습니다'
                 else resultTitle.Text=data.success and '주인이 포기했습니다 · 말을 획득했습니다' or '훔치기를 포기했습니다 · 원래 주인이 말을 유지합니다' end
             elseif data.pvpRole=='Owner' then resultTitle.Text=data.success and '방어 성공!  말을 지켰습니다' or '말을 빼앗겼습니다'
-            else resultTitle.Text=data.success and '탈출 성공!  말을 획득했습니다' or '체포되었습니다' end
+            else resultTitle.Text=data.success and '탈출 성공!  말을 획득했습니다' or '체포되었습니다 · 말은 도망갔습니다' end
             resultDistance.Text=string.format('%d / %d m',data.distance,data.goalDistance or data.distance)
             resultStats.Text=string.format('%s  %s\n당근 %d개  ·  충돌 %d회\n보유 말 %d마리',data.rarityId or '',data.horseName or '',data.carrots or 0,data.hits or 0,data.capturedCount or 0)
             replayButton.Visible=false
